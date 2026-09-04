@@ -24,6 +24,7 @@ import {
 import { credentialManager } from './credential_manager';
 import { quotaRouter } from './ai_infrastructure/quota_router';
 import { aiGateway } from './ai_infrastructure/ai_gateway';
+import { taskExecutor } from './ai_infrastructure/task_executor';
 import { geminiProjectRouter, TaskType as GTaskType } from './gemini_project_router';
 import {
   getTaskWeight,
@@ -833,7 +834,8 @@ export async function testLLMConnection(
   config: ReasoningConfig
 ): Promise<{ success: boolean; message: string }> {
   try {
-    const result = await executeLLMRequest({
+    const result = await taskExecutor.executeTask({
+      taskId: 'general_reasoning',
       reasoningConfig: config,
       prompt: 'Ping test connection. Respond with JSON object: {"status": "ok"}',
       systemInstruction: 'Output valid JSON strictly: {"status": "ok"}',

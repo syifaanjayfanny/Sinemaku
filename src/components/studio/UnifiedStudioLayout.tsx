@@ -174,33 +174,47 @@ export const UnifiedStudioLayout: React.FC<UnifiedStudioLayoutProps> = ({
   }, [closeTopWindow, isFocusMode, onSelectTab, openWindow]);
 
   // Flatten shots safely
-  const flatShots: Shot[] = Array.isArray(shots)
-    ? shots
-    : shots && typeof shots === 'object'
-    ? Object.values(shots).flat().filter(Boolean)
-    : [];
+  const flatShots: Shot[] = React.useMemo(() => {
+    return Array.isArray(shots)
+      ? shots
+      : shots && typeof shots === 'object'
+      ? Object.values(shots).flat().filter(Boolean)
+      : [];
+  }, [shots]);
 
   // Derived contextual selections
-  const activeScene = scenes.find((s) => s.id === selectedSceneId) || scenes[0] || null;
-  const activeShots = activeScene && activeScene.id
-    ? flatShots.filter((shot) => shot.scene_id === activeScene.id)
-    : [];
-  const activeShot = flatShots.find((s) => s.id === selectedShotId) || activeShots[0] || null;
+  const activeScene = React.useMemo(
+    () => scenes.find((s) => s.id === selectedSceneId) || scenes[0] || null,
+    [scenes, selectedSceneId]
+  );
+  const activeShots = React.useMemo(() => {
+    return activeScene && activeScene.id
+      ? flatShots.filter((shot) => shot.scene_id === activeScene.id)
+      : [];
+  }, [activeScene, flatShots]);
+  const activeShot = React.useMemo(
+    () => flatShots.find((s) => s.id === selectedShotId) || activeShots[0] || null,
+    [flatShots, selectedShotId, activeShots]
+  );
 
   // Compute timing metrics deterministically from real state
-  const totalScenesDuration = scenes.reduce((acc, sc) => acc + (sc.duration_sec || 0), 0);
+  const totalScenesDuration = React.useMemo(
+    () => scenes.reduce((acc, sc) => acc + (sc.duration_sec || 0), 0),
+    [scenes]
+  );
   const targetDuration = currentProject?.total_duration_target_sec || totalScenesDuration || 0;
 
-  const filteredScenes = scenes.filter((sc) => {
-    if (!sceneSearch.trim()) return true;
+  const filteredScenes = React.useMemo(() => {
+    if (!sceneSearch.trim()) return scenes;
     const q = sceneSearch.toLowerCase();
-    return (
-      sc.title?.toLowerCase().includes(q) ||
-      sc.location_name?.toLowerCase().includes(q) ||
-      sc.event?.toLowerCase().includes(q) ||
-      String(sc.scene_number).includes(q)
+    return scenes.filter(
+      (sc) =>
+        sc.title?.toLowerCase().includes(q) ||
+        sc.location_name?.toLowerCase().includes(q) ||
+        sc.event?.toLowerCase().includes(q) ||
+        String(sc.scene_number).includes(q)
     );
-  });
+  }, [scenes, sceneSearch]);
 
   return (
     <div

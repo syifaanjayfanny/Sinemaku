@@ -122,7 +122,25 @@ function loadJsonState(): FirestoreState {
   try {
     const raw = fs.readFileSync(DB_FILE, 'utf-8');
     const parsed = JSON.parse(raw);
-    return { ...emptyState(), ...parsed };
+    const state = { ...emptyState(), ...parsed };
+    let didCompact = false;
+    if (state.projects) {
+      for (const [id, p] of Object.entries(state.projects)) {
+        if (p && (p as any).consistencyReports && Array.isArray((p as any).consistencyReports)) {
+          const prevSize = JSON.stringify((p as any).consistencyReports).length;
+          const sanitized = sanitizeProjectForStorage(p as Project);
+          const newSize = JSON.stringify(sanitized.consistencyReports).length;
+          if (newSize < prevSize) {
+            state.projects[id] = sanitized;
+            didCompact = true;
+          }
+        }
+      }
+    }
+    if (didCompact) {
+      saveJsonState(state);
+    }
+    return state;
   } catch (err) {
     console.error('Error reading Firestore store file:', err);
     // Attempt recovery from backup if main file is corrupted
@@ -237,6 +255,25 @@ export function sanitizeProjectForStorage(project: Project): Project {
   if (copy.reasoning_config) {
     const { api_key, ...restConfig } = copy.reasoning_config;
     copy.reasoning_config = restConfig;
+  }
+  if (copy.consistencyReports && Array.isArray(copy.consistencyReports)) {
+    const seenStages = new Set<string>();
+    const compacted = [];
+    for (let i = copy.consistencyReports.length - 1; i >= 0; i--) {
+      const rep = copy.consistencyReports[i];
+      const key = rep.stage || `idx_${i}`;
+      if (!seenStages.has(key)) {
+        seenStages.add(key);
+        const cleanRep = { ...rep };
+        if (cleanRep.warnings && Array.isArray(cleanRep.warnings)) {
+          cleanRep.warnings = cleanRep.warnings.map((w: string) =>
+            typeof w === 'string' && w.length > 200 ? `${w.slice(0, 180)}...` : w
+          );
+        }
+        compacted.unshift(cleanRep);
+      }
+    }
+    copy.consistencyReports = compacted;
   }
   return copy;
 }
@@ -1356,9 +1393,15 @@ export const firestoreDb = {
     ]);
 
     const shotsMap: Record<string, Shot[]> = {};
+    for (const shot of allShots) {
+      if (shot.scene_id) {
+        if (!shotsMap[shot.scene_id]) shotsMap[shot.scene_id] = [];
+        shotsMap[shot.scene_id].push(shot);
+      }
+    }
     for (const scene of rawScenes) {
-      if (scene.id) {
-        shotsMap[scene.id] = allShots.filter((s) => s.scene_id === scene.id);
+      if (scene.id && !shotsMap[scene.id]) {
+        shotsMap[scene.id] = [];
       }
     }
 
@@ -1371,9 +1414,10 @@ export const firestoreDb = {
     });
 
     const promptsMap: Record<string, VideoPrompt[]> = {};
-    for (const shot of allShots) {
-      if (shot.id) {
-        promptsMap[shot.id] = allVideoPrompts.filter((v) => v.shot_id === shot.id);
+    for (const prompt of allVideoPrompts) {
+      if (prompt.shot_id) {
+        if (!promptsMap[prompt.shot_id]) promptsMap[prompt.shot_id] = [];
+        promptsMap[prompt.shot_id].push(prompt);
       }
     }
 

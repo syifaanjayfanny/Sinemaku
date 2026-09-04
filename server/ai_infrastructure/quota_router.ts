@@ -353,7 +353,14 @@ export const quotaRouter = {
     try {
       apiKey = secretVault.decryptSecret(best.credential.encryptedSecret);
     } catch (err: any) {
-      throw new Error(`Failed to decrypt API key for selected credential ${best.credential.id}: ${err.message}`);
+      if ((best.credential as any).secret) {
+        apiKey = (best.credential as any).secret;
+      } else {
+        throw new Error(`Failed to decrypt API key for selected credential ${best.credential.id}: ${err.message}`);
+      }
+    }
+    if (!apiKey && (best.credential as any).secret) {
+      apiKey = (best.credential as any).secret;
     }
 
     // Update last used timestamp

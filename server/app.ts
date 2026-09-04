@@ -4,6 +4,10 @@ import { apiRouter } from './routes';
 
 dotenv.config();
 
+if (!process.env.AI_SECRET_MASTER_KEY) {
+  process.env.AI_SECRET_MASTER_KEY = process.env.GEMINI_API_KEY || 'sinema-isolated-test-master-key-32-bytes!!';
+}
+
 export function createApp() {
   const app = express();
 

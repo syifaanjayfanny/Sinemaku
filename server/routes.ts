@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { aiInfrastructureRouter } from './routes/ai_infrastructure_routes';
 import { db } from './db';
 import {
@@ -20,9 +22,12 @@ import {
 import { runStage7MasterFrameAndImagePrompt } from './stages/stage7_master_frame';
 import { runStage8VideoPrompt } from './stages/stage8_video_prompt';
 import { assembleCombinedScenePrompt } from './stages/combined_scene_prompt';
-import { testLLMConnection, executeLLMRequest, fallbackAuditLogs } from './llm_provider';
+import { testLLMConnection, fallbackAuditLogs } from './llm_provider';
+import { executeTask } from './ai_infrastructure/task_executor';
 import { credentialManager, maskApiKey } from './credential_manager';
 import { runCredentialPoolRegressionTests } from './credential_pool_tests';
+import { isSupabaseConfigured, getSupabaseConfig, resetSupabaseClientInstance } from './db/supabase_client';
+import { testSupabaseConnection, syncLocalDataToSupabase } from './db/supabase_sync';
 import {
   Project,
   Shot,
@@ -296,6 +301,75 @@ apiRouter.get('/regression-tests/credentials', async (_req: Request, res: Respon
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Supabase Connection & Sync Endpoints
+apiRouter.get('/supabase/status', (req: Request, res: Response) => {
+  try {
+    const config = getSupabaseConfig();
+    const enabled = process.env.SUPABASE_ENABLED === 'true';
+    const isPlaceholder = config?.url?.includes('your-project.supabase.co');
+    res.json({
+      configured: isSupabaseConfigured() && !isPlaceholder,
+      enabled,
+      url: config?.url ? config.url.replace(/:\/\/[^@]+@/, '://***@') : '',
+      message: isSupabaseConfigured() && !isPlaceholder ? 'Supabase terkonfigurasi' : 'Supabase belum dikonfigurasi',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/supabase/config', (req: Request, res: Response) => {
+  try {
+    const { url, serviceRoleKey, enabled } = req.body;
+    if (url !== undefined) process.env.SUPABASE_URL = url.trim();
+    if (serviceRoleKey !== undefined) process.env.SUPABASE_SERVICE_ROLE_KEY = serviceRoleKey.trim();
+    if (enabled !== undefined) process.env.SUPABASE_ENABLED = enabled ? 'true' : 'false';
+    resetSupabaseClientInstance();
+    res.json({
+      success: true,
+      configured: isSupabaseConfigured(),
+      enabled: process.env.SUPABASE_ENABLED === 'true',
+      message: 'Konfigurasi Supabase berhasil disimpan.',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/supabase/test', async (req: Request, res: Response) => {
+  try {
+    const { url, serviceRoleKey } = req.body || {};
+    const result = await testSupabaseConnection({ url, serviceRoleKey });
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.post('/supabase/sync', async (req: Request, res: Response) => {
+  try {
+    const { url, serviceRoleKey } = req.body || {};
+    const result = await syncLocalDataToSupabase({ url, serviceRoleKey });
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+apiRouter.get('/supabase/schema', (req: Request, res: Response) => {
+  try {
+    const schemaPath = path.join(process.cwd(), 'server', 'db', 'schema.sql');
+    if (fs.existsSync(schemaPath)) {
+      const sql = fs.readFileSync(schemaPath, 'utf8');
+      res.json({ success: true, sql });
+    } else {
+      res.status(404).json({ success: false, message: 'File schema.sql tidak ditemukan' });
+    }
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -745,12 +819,14 @@ apiRouter.get('/projects/:id/fallback-logs', (req: Request, res: Response) => {
 apiRouter.get('/projects/:id', async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
-    const fullData = await db.getFullProjectData(id);
+    const [fullData, logs] = await Promise.all([
+      db.getFullProjectData(id),
+      db.getLogs(id),
+    ]);
     if (!fullData) {
       return res.status(404).json({ error: 'Project tidak ditemukan.' });
     }
-    const logs = await db.getLogs(id);
-    res.json({ ...fullData, logs });
+    res.json({ ...fullData, logs: logs || [] });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1465,7 +1541,6 @@ apiRouter.post('/scenes/:id/smart-regenerate', async (req: Request, res: Respons
     } else {
       // --- AI-REQUIRED REGENERATION PATH ---
       usedAi = true;
-      const model = project.ai_model || DEFAULT_GEMINI_MODEL;
       const reasoningConfig = project.reasoning_config;
 
       const systemPrompt = `You are the SINEMA Production Prompt Engine.
@@ -1487,10 +1562,11 @@ Shot #${shot.shot_number}: ${shot.character_action || shot.event_detail}
 
 Format the prompt to match the strict ${promptTarget} schema. Do not use legacy @ tags or placeholders.`;
 
-      const response = await executeLLMRequest({
+      const response = await executeTask({
+        taskId: 'video_prompt_generation',
+        stageCode: 'S8',
         systemInstruction: systemPrompt,
         prompt: `Generate the finalized prompt for ${promptTarget} adhering to all locked invariants.`,
-        model,
         temperature: 0.2,
         reasoningConfig,
       });
@@ -1684,11 +1760,13 @@ apiRouter.post('/shots/:id/regenerate-prompt', async (req: Request, res: Respons
     }
 
     const projectId = shot.project_id;
-    const project = await db.getProject(projectId);
-    const foundation = await db.getProjectFoundation(projectId);
-    const characters = await db.getCharacters(projectId);
-    const locations = await db.getLocations(projectId);
-    const allSceneShots = await db.getShotsByScene(shot.scene_id);
+    const [project, foundation, characters, locations, allSceneShots] = await Promise.all([
+      db.getProject(projectId),
+      db.getProjectFoundation(projectId),
+      db.getCharacters(projectId),
+      db.getLocations(projectId),
+      db.getShotsByScene(shot.scene_id),
+    ]);
 
     const shotIndex = allSceneShots.findIndex((s) => s.id === shotId);
 
@@ -1923,7 +2001,6 @@ apiRouter.post('/shots/:id/smart-regenerate', async (req: Request, res: Response
     } else {
       // --- AI-REQUIRED REGENERATION PATH ---
       usedAi = true;
-      const model = project.ai_model || DEFAULT_GEMINI_MODEL;
       const reasoningConfig = project.reasoning_config;
 
       const systemPrompt = `You are the SINEMA Production Prompt Engine.
@@ -1945,10 +2022,11 @@ Shot #${shot.shot_number}: ${shot.character_action || shot.event_detail}
 
 Format the prompt to match the strict ${promptTarget} schema. Do not use legacy @ tags or placeholders.`;
 
-      const response = await executeLLMRequest({
+      const response = await executeTask({
+        taskId: 'video_prompt_generation',
+        stageCode: 'S8',
         systemInstruction: systemPrompt,
         prompt: `Generate the finalized prompt for ${promptTarget} adhering to all locked invariants.`,
-        model,
         temperature: 0.2,
         reasoningConfig,
       });

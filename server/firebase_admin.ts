@@ -36,10 +36,8 @@ let cachedFirestore: Firestore | null = null;
 function inferProjectId(): string | undefined {
   return (
     process.env.FIREBASE_PROJECT_ID ||
-    process.env.GOOGLE_CLOUD_PROJECT ||
-    process.env.GCLOUD_PROJECT ||
     process.env.FIRESTORE_PROJECT_ID ||
-    undefined
+    (process.env.GOOGLE_APPLICATION_CREDENTIALS ? (process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT) : undefined)
   );
 }
 

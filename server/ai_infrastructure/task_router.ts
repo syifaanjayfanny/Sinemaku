@@ -30,7 +30,10 @@ export const taskRouter = {
 
     // 1. Check for manual override / pinned model if policy explicitly pins a specific model
     if (projectPolicy.mode === 'pin' && projectPolicy.pinnedModelId && projectPolicy.pinnedModelId !== 'auto') {
-      const pinnedModel = await db.getModel(projectPolicy.pinnedModelId, projectPolicy.pinnedProviderId);
+      let pinnedModel = await db.getModel(projectPolicy.pinnedModelId, projectPolicy.pinnedProviderId);
+      if (!pinnedModel) {
+        pinnedModel = await db.getModel(projectPolicy.pinnedModelId);
+      }
       if (pinnedModel && pinnedModel.enabled) {
         // Resolve best credential for this provider
         const credSelection = await quotaRouter.selectCredential(pinnedModel.providerId);

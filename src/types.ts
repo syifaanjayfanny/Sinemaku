@@ -1166,10 +1166,10 @@ export interface CharacterBible {
   identity_version?: number;
   hair: string;
   beard: string;
-  clothing: string[];
+  clothing: string[] | string;
   costume?: string;
   wardrobe?: string;
-  accessories: string[];
+  accessories: string[] | string;
   personality: string;
   voice_character: string;
   movement_style: string;

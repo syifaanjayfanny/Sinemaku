@@ -402,6 +402,14 @@ export const capabilityRegistry = {
 
   // Resolve native model name for a provider
   resolveNativeModel(providerId: string, modelId: string): string {
+    if (providerId === 'google') {
+      if (modelId === 'gemini-2.5-flash' || modelId === 'gemini-2.0-flash' || modelId === 'gemini-1.5-flash' || modelId === 'gemini-3.6-flash') {
+        return 'gemini-3.8-flash';
+      }
+      if (modelId === 'gemini-2.5-pro' || modelId === 'gemini-2.0-pro' || modelId === 'gemini-1.5-pro') {
+        return 'gemini-3.1-pro-preview';
+      }
+    }
     const modelDef = modelsRegistry[modelId];
     if (modelDef) {
       const provConfig = modelDef.providers[providerId];

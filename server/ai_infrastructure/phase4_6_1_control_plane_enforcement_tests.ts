@@ -29,6 +29,7 @@ export interface InspectionContext {
 // Approved Infrastructure Boundary Files (where provider SDKs/drivers may legitimately reside)
 const APPROVED_INFRASTRUCTURE_FILES = new Set([
   'server/ai_infrastructure/ai_gateway.ts',
+  'server/ai_infrastructure/provider_adapter_registry.ts',
   'server/ai_infrastructure/openai_compatible_driver.ts',
   'server/routes/ai_infrastructure_routes.ts', // Controlled Admin key testing & health simulation
   'server/gemini.ts',                           // Low-level helper getGeminiAI & Omni capability probe

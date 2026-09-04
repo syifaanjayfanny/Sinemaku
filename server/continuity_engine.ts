@@ -151,7 +151,9 @@ export function createCharacterContinuityState(character: CharacterBible): Chara
     },
     costume,
     appearance: {
-      accessories: character.accessories || [],
+      accessories: Array.isArray(character.accessories)
+        ? character.accessories
+        : (typeof character.accessories === 'string' && character.accessories.trim() ? [character.accessories.trim()] : []),
       facial_features: [character.hair, character.beard].filter(Boolean),
       body_features: [character.physical_appearance].filter(Boolean),
     },
@@ -586,8 +588,12 @@ export function createContinuityState(
     deathYear: phase6EntityForName(character.name, context)?.deathYear,
     age: character.age,
     attributes: [character.physical_appearance, character.personality].filter(Boolean),
-    clothing: [...(character.clothing || [])],
-    accessories: [...(character.accessories || [])],
+    clothing: Array.isArray(character.clothing)
+      ? [...character.clothing]
+      : (typeof character.clothing === 'string' && character.clothing.trim() ? [character.clothing.trim()] : []),
+    accessories: Array.isArray(character.accessories)
+      ? [...character.accessories]
+      : (typeof character.accessories === 'string' && character.accessories.trim() ? [character.accessories.trim()] : []),
     relationships: [],
     possessions: [],
     provenance: phase6EntityForName(character.name, context)?.sourceIds || [],

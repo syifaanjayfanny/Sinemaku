@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS characters (
   physical_appearance TEXT DEFAULT '',
   physical_description TEXT,
   role TEXT,
+  importance TEXT,
   face_identity_locked BOOLEAN NOT NULL DEFAULT false,
   identity_version INTEGER DEFAULT 1,
   hair TEXT DEFAULT '',
@@ -123,11 +124,14 @@ CREATE TABLE IF NOT EXISTS locations (
   architecture TEXT DEFAULT '',
   architectural_style TEXT,
   environment TEXT DEFAULT '',
+  environment_type TEXT,
   landscape TEXT DEFAULT '',
   climate TEXT DEFAULT '',
   culture TEXT DEFAULT '',
   lighting_style TEXT DEFAULT '',
   lighting_atmosphere TEXT,
+  lighting_vibe TEXT,
+  spatial_details TEXT,
   description TEXT,
   color_palette JSONB NOT NULL DEFAULT '[]'::jsonb,
   material TEXT DEFAULT '',
@@ -162,6 +166,7 @@ CREATE TABLE IF NOT EXISTS scenes (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   scene_number INTEGER NOT NULL,
   title TEXT NOT NULL DEFAULT '',
+  summary TEXT DEFAULT '',
   duration_sec INTEGER NOT NULL DEFAULT 5,
   story_purpose TEXT DEFAULT '',
   location_name TEXT DEFAULT '',
@@ -696,3 +701,32 @@ BEGIN
   RETURN '{"status": "success"}'::jsonb;
 END;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- Safe Incremental Schema Migration Block
+-- Adds any newly introduced columns to existing tables without breaking data
+-- ---------------------------------------------------------------------------
+DO $$
+BEGIN
+  -- Characters
+  ALTER TABLE characters ADD COLUMN IF NOT EXISTS importance TEXT;
+  ALTER TABLE characters ADD COLUMN IF NOT EXISTS role TEXT;
+  ALTER TABLE characters ADD COLUMN IF NOT EXISTS costume TEXT;
+  ALTER TABLE characters ADD COLUMN IF NOT EXISTS wardrobe TEXT;
+  ALTER TABLE characters ADD COLUMN IF NOT EXISTS master_portrait_prompt TEXT;
+
+  -- Locations
+  ALTER TABLE locations ADD COLUMN IF NOT EXISTS environment_type TEXT;
+  ALTER TABLE locations ADD COLUMN IF NOT EXISTS lighting_vibe TEXT;
+  ALTER TABLE locations ADD COLUMN IF NOT EXISTS spatial_details TEXT;
+  ALTER TABLE locations ADD COLUMN IF NOT EXISTS architectural_style TEXT;
+  ALTER TABLE locations ADD COLUMN IF NOT EXISTS lighting_atmosphere TEXT;
+
+  -- Scenes
+  ALTER TABLE scenes ADD COLUMN IF NOT EXISTS summary TEXT;
+  ALTER TABLE scenes ADD COLUMN IF NOT EXISTS continuity_snapshot JSONB;
+
+  -- Shots
+  ALTER TABLE shots ADD COLUMN IF NOT EXISTS master_image_prompt TEXT;
+  ALTER TABLE shots ADD COLUMN IF NOT EXISTS cinematic_grammar JSONB;
+END $$;

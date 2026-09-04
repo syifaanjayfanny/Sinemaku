@@ -121,7 +121,7 @@ export const CharacterDetailWindow: React.FC<CharacterDetailWindowProps> = ({
         <div className="bg-[#121322] p-3 rounded-xl border border-[#1E2034] space-y-1.5">
           <span className="text-[10px] font-mono uppercase font-bold text-amber-400">Kostum, Jubah &amp; Wardrobe</span>
           <p className="text-amber-200 text-[11px] leading-relaxed">
-            {character.costume || character.wardrobe || (character.clothing?.join(', ')) || 'Pakaian otentik era historis.'}
+            {character.costume || character.wardrobe || (Array.isArray(character.clothing) ? character.clothing.filter(Boolean).join(', ') : (typeof character.clothing === 'string' ? character.clothing : '')) || 'Pakaian otentik era historis.'}
           </p>
         </div>
       </div>

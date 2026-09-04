@@ -48,6 +48,11 @@ export const healthService = {
       return { errorType: 'CONNECTION_ERROR', cooldownMs: 30 * 1000 };
     }
     
+    // 6b. Model Overload / High Demand Spikes (temporary transient demand, short backoff, do not lock down credential)
+    if (msg.includes('high demand') || msg.includes('spikes in demand')) {
+      return { errorType: 'SERVER_5XX_ERROR', cooldownMs: 3 * 1000 };
+    }
+
     // 7. Server 5XX Error
     if ((statusCode && statusCode >= 500 && statusCode < 600) || msg.includes('internal server error') || msg.includes('500') || msg.includes('502') || msg.includes('503') || msg.includes('bad gateway') || msg.includes('service unavailable') || msg.includes('overloaded')) {
       return { errorType: 'SERVER_5XX_ERROR', cooldownMs: 2 * 60 * 1000 };

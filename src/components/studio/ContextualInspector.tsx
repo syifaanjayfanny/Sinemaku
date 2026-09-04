@@ -576,7 +576,7 @@ export const ContextualInspector: React.FC<ContextualInspectorProps> = ({
             <div className="bg-[#0C0E1A] p-3 rounded-xl border border-[#232644] space-y-1 font-mono">
               <span className="text-slate-400 text-[10px] uppercase font-bold">Kostum &amp; Wardrobe:</span>
               <p className="text-slate-200">
-                {focusModal.data.costume || focusModal.data.wardrobe || (focusModal.data.clothing?.join(', ')) || 'Kostum historis era.'}
+                {focusModal.data.costume || focusModal.data.wardrobe || (Array.isArray(focusModal.data.clothing) ? focusModal.data.clothing.filter(Boolean).join(', ') : (typeof focusModal.data.clothing === 'string' ? focusModal.data.clothing : '')) || 'Kostum historis era.'}
               </p>
             </div>
 

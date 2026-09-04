@@ -199,12 +199,12 @@ export function evaluateStageOutput(stage: string, output: unknown, state: Groun
     }
   }
 
-  const explicitNames = Object.values(flattened.fields).flat().filter((value) => value.length > 1);
+  const explicitNames = Object.values(flattened.fields).flat().filter((value) => value.length > 1 && value.length <= 120);
   for (const candidate of explicitNames) {
     if (/^(name|character_name|subject|fromEntity|toEntity|location|location_name|object)$/i.test(candidate)) continue;
     const looksLikeEntity = /entity|character|person|subject|participant/i.test(candidate);
     if (looksLikeEntity && !entityByName.has(normalize(candidate))) {
-      warnings.push(`Entity '${candidate}' is not established by accepted knowledge.`);
+      warnings.push(`Entity '${candidate.slice(0, 80)}' is not established by accepted knowledge.`);
     }
   }
 

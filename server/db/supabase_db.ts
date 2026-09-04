@@ -1,4 +1,4 @@
-import { getSupabaseClient } from './supabase_client';
+import { getSupabaseClient, getCachedTableColumns } from './supabase_client';
 import { attachEphemeralApiKey } from '../db';
 import {
   Project,
@@ -25,6 +25,7 @@ import {
 } from '../../src/types';
 import { sceneToVirtualShotAdapter } from '../scene_adapter';
 import { recommendSceneTone } from '../narrative_tone';
+import { deriveBeatsForScene } from '../story_architecture';
 
 // Helper to remove undefined properties before inserting/updating JSON or rows
 function sanitizeForSupabase<T extends Record<string, any>>(obj: T): T {
@@ -39,6 +40,187 @@ function sanitizeForSupabase<T extends Record<string, any>>(obj: T): T {
     }
   }
   return clean as T;
+}
+
+const FALLBACK_COLUMNS: Record<string, Set<string>> = {
+  projects: new Set([
+    'id', 'title', 'raw_script', 'total_duration_target_sec', 'max_scene_shot_duration_sec',
+    'scene_duration_sec', 'duration_mode', 'fixed_scene_duration', 'project_duration',
+    'timeline_scene_duration', 'duration_mode_override', 'model_output_duration',
+    'selected_extended_duration', 'primary_video_model', 'foundation_status',
+    'allow_final_scene_override', 'prompt_language', 'image_model', 'video_model',
+    'include_seedance_format', 'status', 'current_stage', 'error_message',
+    'duration_validation_passed', 'retry_count', 'active_run_id', 'latest_run_id',
+    'reasoning_config', 'reasoning_model_preferences', 'owner_id', 'created_at', 'updated_at',
+    // Backwards compatibility columns if table was created in older schema
+    'original_prompt', 'synopsis', 'logline', 'genre', 'format', 'duration_sec',
+    'aspect_ratio', 'visual_style', 'workflow_phase', 'pipeline_status', 'overall_progress',
+    'settings', 'version', 'metadata'
+  ]),
+  project_foundations: new Set([
+    'project_id', 'era', 'theme', 'genre', 'timeline', 'main_characters', 'supporting_characters',
+    'locations', 'main_conflict', 'emotional_arc', 'narrative_arc', 'visual_tone', 'narrative_beats',
+    'is_historical_religious_biography', 'research_basic_facts', 'research_timeline',
+    'research_era_context', 'research_sources', 'act_1_world_setup', 'act_2_human_element',
+    'act_3_rising_conflict', 'act_4_climax_breath', 'act_5_legacy_meaning', 'narrative_style_mode',
+    'islamic_validation_safeguard', 'updated_at', 'premise', 'core_conflict', 'world_rules', 'tone'
+  ]),
+  characters: new Set([
+    'id', 'project_id', 'name', 'age', 'gender', 'physical_appearance', 'physical_description',
+    'role', 'importance', 'face_identity_locked', 'identity_version', 'hair', 'beard',
+    'clothing', 'costume', 'wardrobe', 'accessories', 'personality', 'voice_character',
+    'movement_style', 'master_portrait_prompt', 'version', 'created_at', 'updated_at'
+  ]),
+  locations: new Set([
+    'id', 'project_id', 'name', 'era', 'architecture', 'architectural_style', 'environment',
+    'environment_type', 'landscape', 'climate', 'culture', 'lighting_style',
+    'lighting_atmosphere', 'lighting_vibe', 'spatial_details', 'description',
+    'color_palette', 'material', 'master_environment_prompt', 'version', 'created_at', 'updated_at'
+  ]),
+  objects: new Set([
+    'id', 'project_id', 'name', 'category', 'description', 'continuity_notes',
+    'material', 'owner', 'version', 'created_at', 'updated_at'
+  ]),
+  scenes: new Set([
+    'id', 'project_id', 'scene_number', 'title', 'summary', 'duration_sec', 'story_purpose',
+    'location_name', 'time_of_day', 'character_names', 'emotional_objective', 'event',
+    'narrative_function', 'sequence_id', 'act_id', 'continuity_scope', 'conflict',
+    'beginning_state', 'ending_state', 'beats', 'narrative_modes', 'scene_tone',
+    'master_frame_image_url', 'master_image_prompt', 'master_image_prompt_json',
+    'image_gen_status', 'image_gen_error', 'full_scene_prompt', 'full_scene_prompt_status',
+    'continuity_status', 'continuity_violations', 'continuity_snapshot', 'pipeline_status', 'blockers',
+    'status', 'version', 'visual_anchor', 'anchor_ref', 'timeline', 'character_refs',
+    'object_refs', 'location_ref', 'costume_ref', 'master_camera', 'master_composition',
+    'created_at', 'updated_at'
+  ]),
+  shots: new Set([
+    'id', 'scene_id', 'project_id', 'shot_number', 'start_time_sec', 'end_time_sec',
+    'duration_sec', 'event_detail', 'character_action', 'camera_note', 'dialogue',
+    'emotion', 'audio_note', 'beat_id', 'beat_number', 'narrative_mode', 'cinematic_grammar',
+    'shot_image_url', 'image_url', 'visual_description', 'action', 'camera_movement',
+    'shot_type', 'audio_narration', 'sound_effects', 'master_image_prompt', 'video_prompt',
+    'seedance_prompt', 'asset_refs', 'character_refs', 'location_ref', 'costume_ref',
+    'object_refs', 'visual_anchor_ref', 'lock_state', 'camera', 'composition',
+    'prompt_versions', 'selected_platform', 'recommended_platform', 'fallback_platforms',
+    'generation_container_sec', 'generation_status', 'audio_track', 'version', 'created_at', 'updated_at'
+  ]),
+  video_prompts: new Set([
+    'id', 'shot_id', 'scene_id', 'project_id', 'target_platform', 'prompt_target',
+    'generation_type', 'status', 'error', 'timeline_json', 'negative_prompt',
+    'prompt_text', 'camera_parameters', 'seed', 'duration_seconds', 'aspect_ratio',
+    'motion_bucket_id', 'fps', 'cfg_scale', 'version', 'created_at', 'updated_at'
+  ]),
+  project_research_packages: new Set(['project_id', 'research_package', 'research_dossier', 'source_registry', 'context_package', 'updated_at']),
+  project_narrative_blueprints: new Set(['project_id', 'narrative_blueprint', 'full_story', 'narrative_style_config', 'updated_at']),
+  project_production_plans: new Set(['project_id', 'generation_plan', 'quota_profiles', 'ai_call_budget', 'production_readiness', 'finalization_report', 'asset_integrity_reports', 'updated_at']),
+  project_asset_graphs: new Set(['project_id', 'asset_graph', 'validation_result', 'consistency_reports', 'updated_at']),
+  story_architectures: new Set(['id', 'project_id', 'cold_open', 'acts', 'sequences', 'beats', 'theme', 'logline', 'updated_at']),
+  continuity_states: new Set(['id', 'project_id', 'states', 'character_continuity', 'sequence_continuity', 'wardrobe_continuity', 'global_flags', 'updated_at']),
+  continuity_snapshots: new Set(['id', 'project_id', 'scene_number', 'snapshot_data', 'created_at']),
+  pipeline_logs: new Set(['id', 'project_id', 'stage', 'stage_name', 'stage_code', 'scope', 'level', 'message', 'duration_ms', 'error_type', 'run_id', 'timestamp']),
+  stage_telemetry: new Set(['id', 'project_id', 'run_id', 'scene_id', 'shot_id', 'stage', 'stage_code', 'scope', 'attempt', 'started_at', 'completed_at', 'duration_ms', 'status', 'error_type', 'error_message', 'summary_type', 'summary', 'created_at']),
+  ai_providers: new Set(['id', 'name', 'type', 'base_url', 'enabled', 'capabilities', 'created_at', 'updated_at']),
+  ai_credentials: new Set(['id', 'provider_id', 'name', 'masked_key', 'encrypted_secret', 'google_metadata', 'status', 'priority', 'weight', 'last_used_at', 'created_at', 'updated_at']),
+  ai_models: new Set(['id', 'provider_id', 'display_name', 'tier', 'capabilities', 'enabled', 'context_window', 'created_at', 'updated_at']),
+  ai_usage: new Set(['id', 'credential_id', 'model_id', 'request_type', 'stage', 'prompt_tokens', 'completion_tokens', 'total_tokens', 'latency_ms', 'success', 'error_type', 'timestamp']),
+  ai_health: new Set(['credential_id', 'status', 'consecutive_failures', 'success_rate', 'cooldown_until', 'last_error', 'updated_at']),
+  ai_routing_policies: new Set(['id', 'task_type', 'preferred_model_ids', 'fallback_model_ids', 'strategy', 'enabled', 'created_at', 'updated_at']),
+};
+
+export function sanitizeRowForTable(tableName: string, rawRow: Record<string, any>): Record<string, any> {
+  if (!rawRow || typeof rawRow !== 'object') return rawRow;
+  const row = { ...rawRow };
+
+  const cachedCols = getCachedTableColumns(tableName);
+  const allowed = cachedCols || FALLBACK_COLUMNS[tableName];
+
+  if (tableName === 'characters') {
+    if (typeof row.face_identity_locked === 'string') {
+      if (!row.physical_description && (row.face_identity_locked as string).trim().length > 0) {
+        row.physical_description = row.face_identity_locked;
+      }
+      row.face_identity_locked = true;
+    } else {
+      row.face_identity_locked = Boolean(row.face_identity_locked);
+    }
+
+    if (row.clothing && typeof row.clothing === 'string') {
+      row.clothing = [row.clothing];
+    } else if (!Array.isArray(row.clothing)) {
+      row.clothing = [];
+    }
+
+    if (row.accessories && typeof row.accessories === 'string') {
+      row.accessories = [row.accessories];
+    } else if (!Array.isArray(row.accessories)) {
+      row.accessories = [];
+    }
+
+    if (row.importance && (!allowed || !allowed.has('importance'))) {
+      if (!row.role || row.role === 'Unknown') {
+        row.role = row.importance;
+      }
+      delete row.importance;
+    }
+  } else if (tableName === 'locations') {
+    if (row.color_palette && typeof row.color_palette === 'string') {
+      row.color_palette = [row.color_palette];
+    } else if (!Array.isArray(row.color_palette)) {
+      row.color_palette = [];
+    }
+
+    if (row.environment_type && (!allowed || !allowed.has('environment_type'))) {
+      if (!row.environment) row.environment = row.environment_type;
+      delete row.environment_type;
+    }
+
+    if (row.spatial_details && (!allowed || !allowed.has('spatial_details'))) {
+      if (!row.architectural_style) row.architectural_style = row.spatial_details;
+      if (!row.description) row.description = row.spatial_details;
+      delete row.spatial_details;
+    }
+
+    if (row.lighting_vibe && (!allowed || !allowed.has('lighting_vibe'))) {
+      if (!row.lighting_atmosphere) row.lighting_atmosphere = row.lighting_vibe;
+      delete row.lighting_vibe;
+    }
+  } else if (tableName === 'scenes') {
+    if (row.summary && (!allowed || !allowed.has('summary'))) {
+      if (!row.story_purpose) row.story_purpose = row.summary;
+      delete row.summary;
+    }
+    if (row.character_names && !Array.isArray(row.character_names)) {
+      row.character_names = typeof row.character_names === 'string' ? [row.character_names] : [];
+    }
+    if (row.beats && !Array.isArray(row.beats)) row.beats = [];
+    if (row.narrative_modes && !Array.isArray(row.narrative_modes)) row.narrative_modes = [];
+    if (row.duration_sec !== undefined) row.duration_sec = Number(row.duration_sec) || 5;
+  } else if (tableName === 'shots') {
+    if (row.duration_sec !== undefined) row.duration_sec = Number(row.duration_sec) || 5;
+    if (row.start_time_sec !== undefined) row.start_time_sec = Number(row.start_time_sec) || 0;
+    if (row.end_time_sec !== undefined) row.end_time_sec = Number(row.end_time_sec) || (row.start_time_sec + row.duration_sec);
+    if (row.dialogue && !Array.isArray(row.dialogue)) row.dialogue = [];
+  } else if (tableName === 'video_prompts') {
+    if (!row.target_platform && row.platform) row.target_platform = row.platform;
+    if (!row.prompt_text && row.prompt) row.prompt_text = row.prompt;
+  }
+
+  const clean: Record<string, any> = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (value === undefined) continue;
+
+    if (allowed && !allowed.has(key)) {
+      continue;
+    }
+
+    if (value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+      clean[key] = sanitizeForSupabase(value);
+    } else {
+      clean[key] = value;
+    }
+  }
+
+  return clean;
 }
 
 /**
@@ -59,53 +241,11 @@ export const supabaseDb = {
     if (error) throw new Error(`[Supabase Error listProjects]: ${error.message}`);
     if (!projects) return [];
 
-    const projectIds = projects.map(p => p.id);
-    if (projectIds.length === 0) return [];
-
-    const [resRes, narRes, prodRes, assetRes] = await Promise.all([
-      supabase.from('project_research_packages').select('*').in('project_id', projectIds),
-      supabase.from('project_narrative_blueprints').select('*').in('project_id', projectIds),
-      supabase.from('project_production_plans').select('*').in('project_id', projectIds),
-      supabase.from('project_asset_graphs').select('*').in('project_id', projectIds),
-    ]);
-
-    const resMap = new Map((resRes.data || []).map(r => [r.project_id, r]));
-    const narMap = new Map((narRes.data || []).map(n => [n.project_id, n]));
-    const prodMap = new Map((prodRes.data || []).map(p => [p.project_id, p]));
-    const assetMap = new Map((assetRes.data || []).map(a => [a.project_id, a]));
-
-    return projects.map(p => {
-      const res = resMap.get(p.id) || {};
-      const nar = narMap.get(p.id) || {};
-      const prod = prodMap.get(p.id) || {};
-      const asset = assetMap.get(p.id) || {};
-
-      return {
-        ...p,
-        // Virtual/derived ai_model for UI and backward compatibility (Single Source of Truth is reasoning_config)
-        ai_model: p.reasoning_config?.model_id || (p.reasoning_config?.execution_policy?.mode === 'auto' ? 'auto' : 'gemini-3.7-flash'),
-
-        research_package: res.research_package || (p as any).research_package,
-        research_dossier: res.research_dossier || (p as any).research_dossier,
-        source_registry: res.source_registry || (p as any).source_registry,
-        context_package: res.context_package || (p as any).context_package,
-
-        narrative_blueprint: nar.narrative_blueprint || (p as any).narrative_blueprint,
-        full_story: nar.full_story || (p as any).full_story,
-        narrative_style_config: nar.narrative_style_config || (p as any).narrative_style_config,
-
-        generation_plan: prod.generation_plan || (p as any).generation_plan,
-        quota_profiles: prod.quota_profiles || (p as any).quota_profiles,
-        ai_call_budget: prod.ai_call_budget || (p as any).ai_call_budget,
-        production_readiness: prod.production_readiness || (p as any).production_readiness,
-        finalization_report: prod.finalization_report || (p as any).finalization_report,
-        asset_integrity_reports: prod.asset_integrity_reports || (p as any).asset_integrity_reports,
-
-        asset_graph: asset.asset_graph || (p as any).asset_graph,
-        validation_result: asset.validation_result || (p as any).validation_result,
-        consistency_reports: asset.consistency_reports || (p as any).consistency_reports,
-      } as Project;
-    });
+    return projects.map(p => ({
+      ...p,
+      // Virtual/derived ai_model for UI and backward compatibility (Single Source of Truth is reasoning_config)
+      ai_model: p.reasoning_config?.model_id || (p.reasoning_config?.execution_policy?.mode === 'auto' ? 'auto' : 'gemini-3.7-flash'),
+    } as Project));
   },
 
   async getProject(id: string): Promise<Project | null> {
@@ -161,7 +301,9 @@ export const supabaseDb = {
       characters,
       locations,
       objects,
-      scenes,
+      rawScenes,
+      allShots,
+      allVideoPrompts,
       storyArchitecture,
       continuityState,
     ] = await Promise.all([
@@ -170,9 +312,40 @@ export const supabaseDb = {
       this.getLocations(projectId),
       this.getObjects(projectId),
       this.getScenes(projectId),
+      this.getShotsByProject(projectId),
+      this.getVideoPromptsByProject(projectId),
       this.getStoryArchitecture(projectId),
       this.getCharacterContinuityStates(projectId),
     ]);
+
+    const shotsMap: Record<string, Shot[]> = {};
+    for (const shot of allShots) {
+      if (shot.scene_id) {
+        if (!shotsMap[shot.scene_id]) shotsMap[shot.scene_id] = [];
+        shotsMap[shot.scene_id].push(shot);
+      }
+    }
+    for (const scene of rawScenes) {
+      if (scene.id && !shotsMap[scene.id]) {
+        shotsMap[scene.id] = [];
+      }
+    }
+
+    const scenes = rawScenes.map(scene => {
+      const sceneShots = scene.id ? shotsMap[scene.id] || [] : [];
+      if (!scene.beats || scene.beats.length === 0) {
+        scene.beats = deriveBeatsForScene(scene, sceneShots);
+      }
+      return scene;
+    });
+
+    const promptsMap: Record<string, VideoPrompt[]> = {};
+    for (const prompt of allVideoPrompts) {
+      if (prompt.shot_id) {
+        if (!promptsMap[prompt.shot_id]) promptsMap[prompt.shot_id] = [];
+        promptsMap[prompt.shot_id].push(prompt);
+      }
+    }
 
     return {
       project,
@@ -181,8 +354,15 @@ export const supabaseDb = {
       locations,
       objects,
       scenes,
+      shots: shotsMap,
+      video_prompts: promptsMap,
       story_architecture: storyArchitecture || null,
       continuity_states: continuityState.length > 0 ? continuityState : undefined,
+      production_readiness: project.production_readiness || null,
+      generation_plan: project.generation_plan || null,
+      quota_profiles: project.quota_profiles || [],
+      ai_call_budget: project.ai_call_budget || null,
+      asset_graph: project.asset_graph || null,
     };
   },
 
@@ -247,7 +427,7 @@ export const supabaseDb = {
       updated_at: now,
     };
 
-    const { error: pErr } = await supabase.from('projects').upsert(sanitizeForSupabase(projectRow));
+    const { error: pErr } = await supabase.from('projects').upsert(sanitizeRowForTable('projects', projectRow));
     if (pErr) throw new Error(`[Supabase Error saveProject]: ${pErr.message}`);
 
     // 3. Persist domain packages to their normalized tables (supporting both camelCase and snake_case)
@@ -272,7 +452,7 @@ export const supabaseDb = {
     const conRep = pAny.consistency_reports || pAny.consistencyReports;
 
     await Promise.all([
-      supabase.from('project_research_packages').upsert(sanitizeForSupabase({
+      supabase.from('project_research_packages').upsert(sanitizeRowForTable('project_research_packages', {
         project_id: project.id,
         research_package: resPkg,
         research_dossier: resDos,
@@ -280,14 +460,14 @@ export const supabaseDb = {
         context_package: ctxPkg,
         updated_at: now,
       })),
-      supabase.from('project_narrative_blueprints').upsert(sanitizeForSupabase({
+      supabase.from('project_narrative_blueprints').upsert(sanitizeRowForTable('project_narrative_blueprints', {
         project_id: project.id,
         narrative_blueprint: narBp,
         full_story: fStory,
         narrative_style_config: narSty,
         updated_at: now,
       })),
-      supabase.from('project_production_plans').upsert(sanitizeForSupabase({
+      supabase.from('project_production_plans').upsert(sanitizeRowForTable('project_production_plans', {
         project_id: project.id,
         generation_plan: genPlan,
         quota_profiles: qProf,
@@ -297,7 +477,7 @@ export const supabaseDb = {
         asset_integrity_reports: astRep,
         updated_at: now,
       })),
-      supabase.from('project_asset_graphs').upsert(sanitizeForSupabase({
+      supabase.from('project_asset_graphs').upsert(sanitizeRowForTable('project_asset_graphs', {
         project_id: project.id,
         asset_graph: astGrph,
         validation_result: valRes,
@@ -374,7 +554,7 @@ export const supabaseDb = {
     const supabase = getSupabaseClient();
     const now = new Date().toISOString();
     const { id, ...foundationData } = foundation as any;
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('project_foundations', {
       ...foundationData,
       project_id: foundation.project_id || id,
       updated_at: now,
@@ -434,7 +614,7 @@ export const supabaseDb = {
     }
 
     if (results.length > 0) {
-      const { error } = await supabase.from('characters').upsert(results.map(sanitizeForSupabase));
+      const { error } = await supabase.from('characters').upsert(results.map(r => sanitizeRowForTable('characters', r)));
       if (error) throw new Error(`[Supabase Error saveAndMergeCharacters]: ${error.message}`);
     }
 
@@ -485,7 +665,7 @@ export const supabaseDb = {
     }
 
     if (results.length > 0) {
-      const { error } = await supabase.from('locations').upsert(results.map(sanitizeForSupabase));
+      const { error } = await supabase.from('locations').upsert(results.map(r => sanitizeRowForTable('locations', r)));
       if (error) throw new Error(`[Supabase Error saveAndMergeLocations]: ${error.message}`);
     }
 
@@ -535,7 +715,7 @@ export const supabaseDb = {
     }
 
     if (results.length > 0) {
-      const { error } = await supabase.from('objects').upsert(results.map(sanitizeForSupabase));
+      const { error } = await supabase.from('objects').upsert(results.map(r => sanitizeRowForTable('objects', r)));
       if (error) throw new Error(`[Supabase Error saveAndMergeObjects]: ${error.message}`);
     }
 
@@ -567,7 +747,7 @@ export const supabaseDb = {
   async updateScene(sceneId: string, partial: Partial<Scene>): Promise<Scene | null> {
     const supabase = getSupabaseClient();
     const now = new Date().toISOString();
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('scenes', {
       ...partial,
       updated_at: now,
     });
@@ -587,7 +767,7 @@ export const supabaseDb = {
 
     const rows = scenes.map((s, idx) => {
       const id = (s as any).id || `scene_${projectId}_${s.scene_number || idx + 1}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      return sanitizeForSupabase({
+      return sanitizeRowForTable('scenes', {
         ...s,
         id,
         project_id: projectId,
@@ -670,7 +850,7 @@ export const supabaseDb = {
 
     const rows = shots.map((s, idx) => {
       const id = (s as any).id || `shot_${sceneId}_${s.shot_number || idx + 1}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      return sanitizeForSupabase({
+      return sanitizeRowForTable('shots', {
         ...s,
         id,
         scene_id: sceneId,
@@ -701,7 +881,7 @@ export const supabaseDb = {
   async updateShot(shotId: string, partial: Partial<Shot>): Promise<Shot | null> {
     const supabase = getSupabaseClient();
     const now = new Date().toISOString();
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('shots', {
       ...partial,
       updated_at: now,
     });
@@ -747,7 +927,7 @@ export const supabaseDb = {
 
     const rows = prompts.map((p, idx) => {
       const id = (p as any).id || `vprompt_${shotId}_${p.target_platform || 'plat'}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      return sanitizeForSupabase({
+      return sanitizeRowForTable('video_prompts', {
         ...p,
         id,
         shot_id: shotId,
@@ -784,7 +964,7 @@ export const supabaseDb = {
     const id = prompt.id || `vprompt_${prompt.shot_id}_${targetSlug}_${Date.now()}`;
     const full: VideoPrompt = { ...prompt, id, updated_at: now };
 
-    const { error } = await supabase.from('video_prompts').upsert(sanitizeForSupabase(full));
+    const { error } = await supabase.from('video_prompts').upsert(sanitizeRowForTable('video_prompts', full));
     if (error) throw new Error(`[Supabase Error saveSingleVideoPrompt]: ${error.message}`);
     return full;
   },
@@ -797,7 +977,7 @@ export const supabaseDb = {
     const now = new Date().toISOString();
     const fullLog: PipelineLogEvent = { ...log, timestamp: now };
 
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('pipeline_logs', {
       project_id: projectId,
       stage: log.stage,
       stage_name: log.stage_name,
@@ -842,7 +1022,7 @@ export const supabaseDb = {
   async addTelemetry(projectId: string, item: StageExecutionTelemetry): Promise<StageExecutionTelemetry> {
     const supabase = getSupabaseClient();
     const now = new Date().toISOString();
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('stage_telemetry', {
       id: item.id || `tel_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       project_id: projectId,
       run_id: item.run_id,
@@ -911,7 +1091,7 @@ export const supabaseDb = {
   async saveStoryArchitecture(arch: StoryArchitecture): Promise<StoryArchitecture> {
     const supabase = getSupabaseClient();
     const now = new Date().toISOString();
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('story_architectures', {
       ...arch,
       project_id: arch.project_id,
       updated_at: now,
@@ -935,7 +1115,7 @@ export const supabaseDb = {
   async saveCharacterContinuityStates(projectId: string, states: CharacterContinuityState[]): Promise<CharacterContinuityState[]> {
     const supabase = getSupabaseClient();
     const now = new Date().toISOString();
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('continuity_states', {
       project_id: projectId,
       states,
       updated_at: now,
@@ -969,7 +1149,7 @@ export const supabaseDb = {
     const supabase = getSupabaseClient();
     const id = `${projectId}_scene_${sceneNumber}`;
     const now = new Date().toISOString();
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('continuity_snapshots', {
       id,
       project_id: projectId,
       scene_number: sceneNumber,
@@ -1012,7 +1192,7 @@ export const supabaseDb = {
   async saveProvider(provider: AIProvider): Promise<AIProvider> {
     const supabase = getSupabaseClient();
     const now = Date.now();
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('ai_providers', {
       id: provider.id,
       name: provider.name,
       type: provider.type,
@@ -1073,7 +1253,7 @@ export const supabaseDb = {
   async saveCredential(cred: AICredential): Promise<AICredential> {
     const supabase = getSupabaseClient();
     const now = Date.now();
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('ai_credentials', {
       id: cred.id,
       provider_id: cred.providerId,
       name: cred.name,
@@ -1139,7 +1319,7 @@ export const supabaseDb = {
   async saveModel(model: AIModel): Promise<AIModel> {
     const supabase = getSupabaseClient();
     const now = Date.now();
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('ai_models', {
       id: model.id,
       provider_id: model.providerId || 'google',
       display_name: model.displayName,
@@ -1200,7 +1380,7 @@ export const supabaseDb = {
     const totalTokens = usage.totalTokens ?? (promptTokens + completionTokens);
     const now = Date.now();
 
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('ai_usage', {
       id: usage.id,
       credential_id: usage.credentialId,
       model_id: usage.modelId || usage.model || 'unknown',
@@ -1251,7 +1431,7 @@ export const supabaseDb = {
   async saveHealth(health: AIHealth): Promise<AIHealth> {
     const supabase = getSupabaseClient();
     const now = Date.now();
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('ai_health', {
       credential_id: health.credentialId,
       status: health.status,
       consecutive_failures: health.consecutiveFailures,
@@ -1311,7 +1491,7 @@ export const supabaseDb = {
   async saveRoutingPolicy(policy: AIRoutingPolicy): Promise<AIRoutingPolicy> {
     const supabase = getSupabaseClient();
     const now = Date.now();
-    const cleanData = sanitizeForSupabase({
+    const cleanData = sanitizeRowForTable('ai_routing_policies', {
       id: policy.id,
       task_type: policy.taskType,
       preferred_model_ids: policy.preferredModelIds,

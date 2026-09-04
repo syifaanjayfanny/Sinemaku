@@ -1,17 +1,18 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import dotenv from 'dotenv';
-import { geminiProjectRouter } from './server/gemini_project_router';
 import { createApp } from './server/app';
+import { geminiProjectRouter } from './server/gemini_project_router';
 
-dotenv.config();
+if (!process.env.AI_SECRET_MASTER_KEY) {
+  process.env.AI_SECRET_MASTER_KEY = process.env.GEMINI_API_KEY || 'sinema-isolated-test-master-key-32-bytes!!';
+}
 
 async function startServer() {
   const app = createApp();
   const PORT = 3000;
 
-  // Vite middleware for development or static assets for production
+  // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -27,16 +28,17 @@ async function startServer() {
   }
 
   // Run initial discovery async without blocking server startup
-  geminiProjectRouter.discoverAndValidateAll().catch(console.error);
+  try {
+    geminiProjectRouter.discoverAndValidateAll().catch((err: any) => {
+      console.warn('[GeminiRouter] Non-blocking discovery warning:', err?.message || err);
+    });
+  } catch (err: any) {
+    console.warn('[GeminiRouter] Discovery init warning:', err?.message || err);
+  }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`AI Cinematic Production Studio server running on http://0.0.0.0:${PORT}`);
+    console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
-
-export { createApp };
+startServer();

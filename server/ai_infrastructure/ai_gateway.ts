@@ -11,6 +11,7 @@ import { capabilityRegistry, AICapabilityError, modelsRegistry } from './capabil
 import { classifyTaskRequirements, rankCandidatesForIntent, TaskIntentRecommendation } from './intelligence_router';
 import { costIntelligenceService } from './cost_intelligence';
 import { costMonitor } from './cost_monitor';
+import { db } from '../db';
 
 export interface AIGatewayRequest {
   model?: string;
@@ -96,6 +97,18 @@ export const aiGateway = {
     const modelId = req.model || recommendedCandidate || 'ops-5';
     const taskType = req.task || 'general_generation';
     const timeoutMs = req.timeoutMs || 30000;
+
+    // Dynamically synchronize custom/database-registered models with AMM capability registry
+    if (!modelsRegistry[modelId]) {
+      try {
+        const dbModel = await db.getModel(modelId, req.providerId);
+        if (dbModel) {
+          capabilityRegistry.registerAMMModel(dbModel.id, dbModel.providerId, 'text', dbModel.id);
+        }
+      } catch {
+        // Safe failover to existing registry state
+      }
+    }
 
     // Calculate pre-execution cost estimate
     const costEstimate = costIntelligenceService.estimateRequestCost(
@@ -243,7 +256,7 @@ export const aiGateway = {
           let latencyMs = 0;
 
           // Resolve config-driven native model name
-          const activeModelId = capabilityRegistry.resolveNativeModel(currentProviderId, modelId);
+          let activeModelId = capabilityRegistry.resolveNativeModel(currentProviderId, modelId);
 
           if (
             apiKey === 'mock_api_key_test' ||
@@ -429,35 +442,104 @@ export const aiGateway = {
           } else {
             const ai = new GoogleGenAI({ apiKey });
 
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('AI Request Timeout')), timeoutMs)
-            );
-
-            const config: any = {
-              systemInstruction: req.systemInstruction,
-              temperature: req.temperature ?? 0.7,
-              maxOutputTokens: req.maxTokens ?? 2048,
+            const isTransientError = (err: any): boolean => {
+              if (!err) return false;
+              const msg = (typeof err === 'string' ? err : (err?.message || JSON.stringify(err) || '')).toLowerCase();
+              const status = err?.status || err?.code || err?.statusCode || err?.error?.code || err?.error?.status;
+              if (status === 503 || status === 429 || status === 504 || status === 502 || status === 'UNAVAILABLE') {
+                return true;
+              }
+              return (
+                msg.includes('503') ||
+                msg.includes('high demand') ||
+                msg.includes('spikes in demand') ||
+                msg.includes('unavailable') ||
+                msg.includes('temporarily unavailable') ||
+                msg.includes('try again later') ||
+                msg.includes('rate limit') ||
+                msg.includes('quota') ||
+                msg.includes('overloaded') ||
+                msg.includes('resource exhausted')
+              );
             };
 
-            if (req.responseSchema) {
-              config.responseMimeType = 'application/json';
-              config.responseSchema = req.responseSchema;
+            const isPro = activeModelId.includes('pro');
+            const fallbackChain = Array.from(new Set([
+              activeModelId,
+              ...(isPro
+                ? ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite']
+                : ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.7-flash', 'gemini-3.1-flash-lite', 'gemini-3.1-pro-preview']
+              ),
+            ]));
+
+            let executionSuccess = false;
+            let lastExecutionError: any = null;
+
+            for (let mIdx = 0; mIdx < fallbackChain.length; mIdx++) {
+              const tryModel = fallbackChain[mIdx];
+              for (let attemptNum = 1; attemptNum <= 2; attemptNum++) {
+                try {
+                  const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('AI Request Timeout')), timeoutMs)
+                  );
+
+                  const config: any = {
+                    systemInstruction: req.systemInstruction,
+                    temperature: req.temperature ?? 0.7,
+                    maxOutputTokens: req.maxTokens ?? 2048,
+                  };
+
+                  if (req.responseSchema) {
+                    config.responseMimeType = 'application/json';
+                    config.responseSchema = req.responseSchema;
+                  }
+
+                  const generatePromise = ai.models.generateContent({
+                    model: tryModel,
+                    contents: req.prompt,
+                    config,
+                  });
+
+                  const response: any = await Promise.race([generatePromise, timeoutPromise]);
+                  latencyMs = Date.now() - startTime;
+
+                  text = response.text || '';
+                  const promptStr = typeof req.prompt === 'string' ? req.prompt : (req.prompt ? JSON.stringify(req.prompt) : '');
+                  promptTokens = Math.round(promptStr.length / 4);
+                  completionTokens = Math.round((text || '').length / 4);
+                  totalTokens = promptTokens + completionTokens;
+
+                  if (tryModel !== activeModelId) {
+                    fallbackReason = `High demand / 503 on ${activeModelId}; cascaded to fallback model ${tryModel}`;
+                    activeModelId = tryModel;
+                  }
+
+                  executionSuccess = true;
+                  break;
+                } catch (googleErr: any) {
+                  lastExecutionError = googleErr;
+                  const isTransient = isTransientError(googleErr);
+                  console.warn(`[AI Gateway] Model ${tryModel} attempt ${attemptNum} failed: ${googleErr?.message || googleErr}`);
+
+                  if (!isTransient) {
+                    break;
+                  }
+
+                  if (attemptNum < 2) {
+                    const jitter = Math.floor(Math.random() * 500) + 500;
+                    await new Promise(resolve => setTimeout(resolve, jitter));
+                  }
+                }
+              }
+
+              if (executionSuccess) {
+                break;
+              }
             }
 
-            const generatePromise = ai.models.generateContent({
-              model: activeModelId,
-              contents: req.prompt,
-              config,
-            });
-
-            const response: any = await Promise.race([generatePromise, timeoutPromise]);
-            latencyMs = Date.now() - startTime;
-
-            text = response.text || '';
-            const promptStr = typeof req.prompt === 'string' ? req.prompt : (req.prompt ? JSON.stringify(req.prompt) : '');
-            promptTokens = Math.round(promptStr.length / 4);
-            completionTokens = Math.round((text || '').length / 4);
-            totalTokens = promptTokens + completionTokens;
+            if (!executionSuccess) {
+              throw lastExecutionError || new Error('Google GenAI generation failed on all fallback models');
+            }
           }
 
           // Record success telemetry
@@ -565,7 +647,7 @@ export const aiGateway = {
 
             let statusCode = 500;
             if (errorMsg.includes('429')) statusCode = 429;
-            if (errorMsg.includes('503')) statusCode = 503;
+            if (errorMsg.includes('503') || errorMsg.includes('high demand') || errorMsg.includes('spikes in demand') || errorMsg.includes('UNAVAILABLE')) statusCode = 503;
             if (errorMsg.includes('401')) statusCode = 401;
 
             const healthRes = await healthService.recordFailure(credentialId, errorMsg, statusCode);

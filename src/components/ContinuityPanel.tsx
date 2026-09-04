@@ -232,7 +232,7 @@ export const ContinuityPanel: React.FC<ContinuityPanelProps> = ({
                     <Lock className="w-3 h-3 text-amber-400" /> Busana Luar &amp; Jubah (Locked)
                   </div>
                   <div className="text-xs text-zinc-200 font-medium">
-                    {(activeCharState as any)?.outer_garment?.value || (activeChar as any).visual_features?.clothing_style || activeChar.costume || activeChar.clothing?.join(', ') || 'Mengikuti deskripsi kanonikal'}
+                    {(activeCharState as any)?.outer_garment?.value || (activeChar as any).visual_features?.clothing_style || activeChar.costume || (Array.isArray(activeChar.clothing) ? activeChar.clothing.filter(Boolean).join(', ') : (typeof activeChar.clothing === 'string' ? activeChar.clothing : '')) || 'Mengikuti deskripsi kanonikal'}
                   </div>
                 </div>
 
@@ -241,7 +241,7 @@ export const ContinuityPanel: React.FC<ContinuityPanelProps> = ({
                     <Lock className="w-3 h-3 text-amber-400" /> Palet Warna Busana
                   </div>
                   <div className="text-xs text-zinc-200 font-medium">
-                    {(activeCharState as any)?.costume?.color_palette?.join(', ') || (activeChar as any).visual_features?.color_palette?.join(', ') || activeChar.clothing?.join(', ') || 'Palet tekstil alami historis'}
+                    {(activeCharState as any)?.costume?.color_palette?.join(', ') || (activeChar as any).visual_features?.color_palette?.join(', ') || (Array.isArray(activeChar.clothing) ? activeChar.clothing.filter(Boolean).join(', ') : (typeof activeChar.clothing === 'string' ? activeChar.clothing : '')) || 'Palet tekstil alami historis'}
                   </div>
                 </div>
 
@@ -250,7 +250,7 @@ export const ContinuityPanel: React.FC<ContinuityPanelProps> = ({
                     <Lock className="w-3 h-3 text-amber-400" /> Aksesori &amp; Properti Melekat
                   </div>
                   <div className="text-xs text-zinc-200 font-medium">
-                    {(activeCharState as any)?.accessories?.map((a: any) => a.value || a).join(', ') || (activeChar as any).visual_features?.accessories?.join(', ') || activeChar.accessories?.join(', ') || 'Tidak ada aksesori khusus'}
+                    {(activeCharState as any)?.accessories?.map((a: any) => a.value || a).join(', ') || (activeChar as any).visual_features?.accessories?.join(', ') || (Array.isArray(activeChar.accessories) ? activeChar.accessories.filter(Boolean).join(', ') : (typeof activeChar.accessories === 'string' ? activeChar.accessories : '')) || 'Tidak ada aksesori khusus'}
                   </div>
                 </div>
               </div>

@@ -21,7 +21,7 @@ export function getGeminiAI(apiKeyOverride?: string | null): GoogleGenAI {
   // so concurrent workers cannot bleed credentials into each other or leak into logs/telemetry.
   const apiKey = (apiKeyOverride && apiKeyOverride.trim().length > 0)
     ? apiKeyOverride.trim()
-    : process.env.GEMINI_API_KEY;
+    : (process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY || process.env.GOOGLE_API_KEY);
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY is not defined in environment variables');
   }
@@ -160,11 +160,20 @@ export function resolveGeminiModel(modelName?: string | null): string {
 
 export const GEMINI_MODEL = DEFAULT_GEMINI_MODEL;
 
+let cachedOmniResult: { result: boolean; expiresAt: number; key: string } | null = null;
+const OMNI_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
 /**
  * Capability check for Gemini Omni / Live features
  * Returns true if the active / managed API key has access to Omni models
  */
 export async function checkGeminiOmniCapability(apiKeyOverride?: string | null): Promise<boolean> {
+  const cacheKey = apiKeyOverride || 'default_active_key';
+  const now = Date.now();
+  if (cachedOmniResult && cachedOmniResult.key === cacheKey && cachedOmniResult.expiresAt > now) {
+    return cachedOmniResult.result;
+  }
+
   try {
     let resolvedKey = apiKeyOverride;
     if (!resolvedKey) {
@@ -182,9 +191,12 @@ export async function checkGeminiOmniCapability(apiKeyOverride?: string | null):
     const response = await ai.models.get({
       model: 'gemini-omni-flash-preview',
     });
-    return !!response?.name;
+    const hasOmni = !!response?.name;
+    cachedOmniResult = { result: hasOmni, expiresAt: now + OMNI_CACHE_TTL_MS, key: cacheKey };
+    return hasOmni;
   } catch (err: any) {
-    // If not accessible (404/403/permission denied), return false
+    // If not accessible (404/403/permission denied), cache negative response for 3 minutes to avoid hammering
+    cachedOmniResult = { result: false, expiresAt: now + 3 * 60 * 1000, key: cacheKey };
     return false;
   }
 }

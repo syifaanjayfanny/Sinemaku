@@ -281,8 +281,8 @@ export type ARMOErrorType =
   | 'unknown';
 
 export function classifyARMOError(err: any): ARMOErrorType {
-  const msg = (err?.message || '').toLowerCase();
-  const status = err?.status;
+  const msg = (typeof err === 'string' ? err : (err?.message || JSON.stringify(err) || '')).toLowerCase();
+  const status = err?.status || err?.code || err?.statusCode || err?.error?.code || err?.error?.status;
 
   if (status === 401 || status === 403 || msg.includes('api key') || msg.includes('unauthorized') || msg.includes('invalid credentials')) {
     return 'auth_failure';
@@ -293,7 +293,15 @@ export function classifyARMOError(err: any): ARMOErrorType {
     }
     return 'rate_limit';
   }
-  if (status === 503 || msg.includes('overloaded') || msg.includes('high demand') || msg.includes('resource exhausted')) {
+  if (
+    status === 503 ||
+    status === 'UNAVAILABLE' ||
+    msg.includes('503') ||
+    msg.includes('overloaded') ||
+    msg.includes('high demand') ||
+    msg.includes('spikes in demand') ||
+    msg.includes('resource exhausted')
+  ) {
     return 'provider_overload';
   }
   if (status === 504 || status === 502 || msg.includes('unavailable') || msg.includes('timeout')) {

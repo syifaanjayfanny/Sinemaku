@@ -188,9 +188,10 @@ async function enforceStageConsistency(projectId: string, stage: string, output:
   const report = evaluateStageOutput(stage, output, state);
   const project = await db.getProject(projectId);
   if (project) {
+    const existing = (project.consistencyReports || []).filter((r) => r.stage !== stage);
     await db.saveProject({
       ...project,
-      consistencyReports: [...(project.consistencyReports || []), report],
+      consistencyReports: [...existing, report],
     });
   }
   assertStageConsistency(report);

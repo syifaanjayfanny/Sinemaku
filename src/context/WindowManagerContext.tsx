@@ -179,23 +179,39 @@ export const WindowManagerProvider: React.FC<{ children: React.ReactNode }> = ({
     setActiveWindowId(null);
   }, []);
 
+  const contextValue = React.useMemo(
+    () => ({
+      windows,
+      activeWindowId,
+      openWindow,
+      closeWindow,
+      minimizeWindow,
+      restoreWindow,
+      maximizeWindow,
+      focusWindow,
+      updatePosition,
+      updateSize,
+      closeTopWindow,
+      minimizeAll,
+    }),
+    [
+      windows,
+      activeWindowId,
+      openWindow,
+      closeWindow,
+      minimizeWindow,
+      restoreWindow,
+      maximizeWindow,
+      focusWindow,
+      updatePosition,
+      updateSize,
+      closeTopWindow,
+      minimizeAll,
+    ]
+  );
+
   return (
-    <WindowManagerContext.Provider
-      value={{
-        windows,
-        activeWindowId,
-        openWindow,
-        closeWindow,
-        minimizeWindow,
-        restoreWindow,
-        maximizeWindow,
-        focusWindow,
-        updatePosition,
-        updateSize,
-        closeTopWindow,
-        minimizeAll,
-      }}
-    >
+    <WindowManagerContext.Provider value={contextValue}>
       {children}
     </WindowManagerContext.Provider>
   );

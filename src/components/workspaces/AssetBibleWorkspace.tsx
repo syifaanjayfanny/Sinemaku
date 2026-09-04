@@ -237,10 +237,18 @@ export const AssetBibleWorkspace: React.FC<AssetBibleWorkspaceProps> = ({
   };
 
   // Helper Prompt Accessors
+  const formatGarments = (clothing?: string[] | string | null): string => {
+    if (!clothing) return '';
+    if (Array.isArray(clothing)) return clothing.filter(Boolean).join(', ');
+    if (typeof clothing === 'string') return clothing.trim();
+    return String(clothing);
+  };
+
   const getCharacterPrompt = (char: CharacterBible) => {
     if (char.master_portrait_prompt && char.master_portrait_prompt.trim().length > 0) return char.master_portrait_prompt;
     const desc = char.physical_description || char.physical_appearance || 'authentic historical facial features';
-    let costume = char.costume || char.wardrobe || (char.clothing?.length ? char.clothing.join(', ') : 'traditional clothing');
+    const clothingStr = formatGarments(char.clothing);
+    let costume = char.costume || char.wardrobe || (clothingStr.length > 0 ? clothingStr : 'traditional clothing');
     const isHoly = isReveredHolyFigureClient(char.name);
 
     if (isHoly && (costume.length < 15 || costume.toLowerCase().includes('t-shirt') || costume.toLowerCase().includes('kaos') || costume.toLowerCase().includes('casual') || costume.toLowerCase().includes('sederhana'))) {
@@ -601,7 +609,7 @@ export const AssetBibleWorkspace: React.FC<AssetBibleWorkspaceProps> = ({
                       <div className="p-3 rounded-2xl bg-[#212335] border border-[#2F324D] space-y-1">
                         <span className="text-[10px] font-mono uppercase font-bold text-amber-400">Wardrobe &amp; Kostum Lock</span>
                         <p className="text-slate-200 leading-relaxed">
-                          {char.costume || char.wardrobe || (char.clothing?.length ? char.clothing.join(', ') : 'Pakaian autentik.')}
+                          {char.costume || char.wardrobe || formatGarments(char.clothing) || 'Pakaian autentik.'}
                         </p>
                       </div>
                     </div>

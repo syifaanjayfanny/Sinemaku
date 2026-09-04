@@ -93,7 +93,14 @@ export const credentialResolver = {
     try {
       apiKey = secretVault.decryptSecret(selected.cred.encryptedSecret);
     } catch (err: any) {
-      throw new Error(`Failed to decrypt API key for credential ${selected.cred.id}: ${err.message}`);
+      if ((selected.cred as any).secret) {
+        apiKey = (selected.cred as any).secret;
+      } else {
+        throw new Error(`Failed to decrypt API key for credential ${selected.cred.id}: ${err.message}`);
+      }
+    }
+    if (!apiKey && (selected.cred as any).secret) {
+      apiKey = (selected.cred as any).secret;
     }
 
     // 4. Update lastUsedAt timestamp

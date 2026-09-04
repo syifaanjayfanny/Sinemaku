@@ -163,7 +163,14 @@ aiInfrastructureRouter.post('/providers/:id/test', async (req: Request, res: Res
     // Try finding credential or do public ping
     const creds = await credentialService.listCredentials();
     const cred = creds.find(c => c.providerId === id);
-    const apiKey = cred ? secretVault.decryptSecret(cred.encryptedSecret) : '';
+    let apiKey = '';
+    if (cred) {
+      try {
+        apiKey = secretVault.decryptSecret(cred.encryptedSecret);
+      } catch {
+        apiKey = (cred as any).secret || '';
+      }
+    }
 
     const testResult = await openaiCompatibleDriver.testConnectivity(provider.baseUrl, apiKey);
     res.json(testResult);
@@ -186,17 +193,36 @@ aiInfrastructureRouter.post('/test-connection', async (req: Request, res: Respon
 
     if (isGoogle) {
       const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
-      const testModel = 'gemini-3.7-flash';
-      const response = await ai.models.generateContent({
-        model: testModel,
-        contents: 'Ping connectivity test. Reply with OK.',
-      });
+      const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.7-flash', 'gemini-3.1-flash-lite'];
+      let response: any = null;
+      let lastErr: any = null;
+      let usedModel = candidateModels[0];
+
+      for (const m of candidateModels) {
+        try {
+          response = await ai.models.generateContent({
+            model: m,
+            contents: 'Ping connectivity test. Reply with OK.',
+          });
+          usedModel = m;
+          break;
+        } catch (err: any) {
+          lastErr = err;
+          const msg = (err?.message || '').toLowerCase();
+          if (!msg.includes('503') && !msg.includes('high demand') && !msg.includes('unavailable') && !msg.includes('spikes in demand')) {
+            throw err;
+          }
+        }
+      }
+      if (!response && lastErr) throw lastErr;
+
       const latencyMs = Date.now() - startTime;
-      const responseText = response.text || '';
+      const responseText = response?.text || '';
       return res.json({
         success: true,
         protocol: 'google-generative-ai',
         providerName: 'Google Generative AI',
+        model: usedModel,
         latency: latencyMs,
         modelsDetected: 6,
         responseSample: responseText.trim().substring(0, 50) || 'OK',
@@ -498,7 +524,12 @@ aiInfrastructureRouter.post('/providers/:id/discover-models', async (req: Reques
       if (!provider.baseUrl) {
         return res.status(400).json({ error: `Provider "${provider.name}" does not have a Base URL configured.` });
       }
-      const apiKey = secretVault.decryptSecret(providerCreds[0].encryptedSecret);
+      let apiKey = '';
+      try {
+        apiKey = secretVault.decryptSecret(providerCreds[0].encryptedSecret);
+      } catch {
+        apiKey = (providerCreds[0] as any).secret || '';
+      }
       discovered = await openaiCompatibleDriver.fetchModels(provider.baseUrl, apiKey);
     }
 
@@ -770,7 +801,12 @@ aiInfrastructureRouter.post('/credentials/:id/test', async (req: Request, res: R
       return res.status(404).json({ success: false, error: 'Credential not found.' });
     }
 
-    const apiKey = secretVault.decryptSecret(cred.encryptedSecret);
+    let apiKey = '';
+    try {
+      apiKey = secretVault.decryptSecret(cred.encryptedSecret);
+    } catch {
+      apiKey = (cred as any).secret || '';
+    }
     const provider = await providerService.getProvider(cred.providerId);
 
     let testModel = 'gemini-3.7-flash';
@@ -790,27 +826,61 @@ aiInfrastructureRouter.post('/credentials/:id/test', async (req: Request, res: R
       }
       responseSample = 'Connection verified successfully';
     } else if (isGoogleProtocol) {
-      testModel = 'gemini-3.7-flash';
+      const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.7-flash', 'gemini-3.1-flash-lite'];
       const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: testModel,
-        contents: 'Ping connectivity test. Reply with OK.',
-      });
+      let response: any = null;
+      let lastErr: any = null;
+      testModel = candidateModels[0];
+
+      for (const m of candidateModels) {
+        try {
+          response = await ai.models.generateContent({
+            model: m,
+            contents: 'Ping connectivity test. Reply with OK.',
+          });
+          testModel = m;
+          break;
+        } catch (err: any) {
+          lastErr = err;
+          const msg = (err?.message || '').toLowerCase();
+          if (!msg.includes('503') && !msg.includes('high demand') && !msg.includes('unavailable') && !msg.includes('spikes in demand')) {
+            throw err;
+          }
+        }
+      }
+      if (!response && lastErr) throw lastErr;
 
       latencyMs = Date.now() - startTime;
-      const responseText = response.text || '';
+      const responseText = response?.text || '';
       responseSample = responseText.trim().substring(0, 50);
     } else {
       // Generic fallback
-      testModel = 'gemini-3.7-flash';
+      const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.7-flash', 'gemini-3.1-flash-lite'];
       const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: testModel,
-        contents: 'Ping connectivity test. Reply with OK.',
-      });
+      let response: any = null;
+      let lastErr: any = null;
+      testModel = candidateModels[0];
+
+      for (const m of candidateModels) {
+        try {
+          response = await ai.models.generateContent({
+            model: m,
+            contents: 'Ping connectivity test. Reply with OK.',
+          });
+          testModel = m;
+          break;
+        } catch (err: any) {
+          lastErr = err;
+          const msg = (err?.message || '').toLowerCase();
+          if (!msg.includes('503') && !msg.includes('high demand') && !msg.includes('unavailable') && !msg.includes('spikes in demand')) {
+            throw err;
+          }
+        }
+      }
+      if (!response && lastErr) throw lastErr;
 
       latencyMs = Date.now() - startTime;
-      const responseText = response.text || '';
+      const responseText = response?.text || '';
       responseSample = responseText.trim().substring(0, 50);
     }
 
@@ -966,7 +1036,12 @@ aiInfrastructureRouter.post('/health/check-all', async (req: Request, res: Respo
     for (const cred of activeCreds) {
       const startTime = Date.now();
       try {
-        const apiKey = secretVault.decryptSecret(cred.encryptedSecret);
+        let apiKey = '';
+        try {
+          apiKey = secretVault.decryptSecret(cred.encryptedSecret);
+        } catch {
+          apiKey = (cred as any).secret || '';
+        }
         const provider = await providerService.getProvider(cred.providerId);
         let latencyMs = 0;
 
@@ -976,10 +1051,26 @@ aiInfrastructureRouter.post('/health/check-all', async (req: Request, res: Respo
           if (!testRes.success) throw new Error(testRes.error || 'Connection failed');
         } else {
           const ai = new GoogleGenAI({ apiKey });
-          await ai.models.generateContent({
-            model: 'gemini-3.7-flash',
-            contents: 'ping',
-          });
+          const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.7-flash', 'gemini-3.1-flash-lite'];
+          let lastErr: any = null;
+          let pingSuccess = false;
+          for (const m of candidateModels) {
+            try {
+              await ai.models.generateContent({
+                model: m,
+                contents: 'ping',
+              });
+              pingSuccess = true;
+              break;
+            } catch (err: any) {
+              lastErr = err;
+              const msg = (err?.message || '').toLowerCase();
+              if (!msg.includes('503') && !msg.includes('high demand') && !msg.includes('unavailable') && !msg.includes('spikes in demand')) {
+                throw err;
+              }
+            }
+          }
+          if (!pingSuccess && lastErr) throw lastErr;
           latencyMs = Date.now() - startTime;
         }
 

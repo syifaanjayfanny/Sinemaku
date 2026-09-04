@@ -139,7 +139,7 @@ const PROVIDER_METADATA: Record<
   },
 };
 
-export const CompactShotCockpit: React.FC<CompactShotCockpitProps> = ({
+export const CompactShotCockpit: React.FC<CompactShotCockpitProps> = React.memo(({
   shot,
   totalShots,
   shotIndex,
@@ -517,7 +517,8 @@ export const CompactShotCockpit: React.FC<CompactShotCockpitProps> = ({
     let posPrompt = c.master_portrait_prompt?.trim();
     if (!posPrompt) {
       const desc = c.physical_description || c.physical_appearance || (c as any).description || 'authentic historical facial features';
-      let costume = c.costume || c.wardrobe || (c.clothing?.length ? c.clothing.join(', ') : 'traditional historical garments');
+      const clothingStr = Array.isArray(c.clothing) ? c.clothing.filter(Boolean).join(', ') : (typeof c.clothing === 'string' ? c.clothing : '');
+      let costume = c.costume || c.wardrobe || (clothingStr.length > 0 ? clothingStr : 'traditional historical garments');
       posPrompt = `Photorealistic cinematic master portrait of ${c.name}, ${c.age || 'adult'}, ${desc}, wearing ${costume}, 8k resolution, cinematic golden hour lighting, 85mm portrait lens, ultra-detailed skin texture --no modern clothes, no noise, no anatomical distortion`;
     }
 
@@ -2210,4 +2211,4 @@ export const CompactShotCockpit: React.FC<CompactShotCockpitProps> = ({
       </FocusWindow>
     </div>
   );
-};
+});

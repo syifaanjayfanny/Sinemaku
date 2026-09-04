@@ -108,10 +108,26 @@ const googleGenerativeAIAdapter: ProviderExecutionAdapter = {
     const startTime = Date.now();
     try {
       const ai = new GoogleGenAI({ apiKey });
-      await ai.models.generateContent({
-        model: 'gemini-3.7-flash',
-        contents: 'Ping connectivity test. Reply with OK.',
-      });
+      const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.7-flash', 'gemini-3.1-flash-lite'];
+      let lastErr: any = null;
+      let ok = false;
+      for (const m of candidateModels) {
+        try {
+          await ai.models.generateContent({
+            model: m,
+            contents: 'Ping connectivity test. Reply with OK.',
+          });
+          ok = true;
+          break;
+        } catch (err: any) {
+          lastErr = err;
+          const msg = (err?.message || '').toLowerCase();
+          if (!msg.includes('503') && !msg.includes('high demand') && !msg.includes('unavailable') && !msg.includes('spikes in demand')) {
+            throw err;
+          }
+        }
+      }
+      if (!ok && lastErr) throw lastErr;
       return { success: true, latencyMs: Date.now() - startTime };
     } catch (err: any) {
       return { success: false, latencyMs: Date.now() - startTime, error: err.message };

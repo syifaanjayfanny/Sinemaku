@@ -539,8 +539,12 @@ export function buildCanonicalProductionContext(params: {
       body: c.movement_style || (isHolyFigure ? 'Stately, dignified posture of spiritual grace' : 'Proportional build'),
       wardrobe: wardrobeText,
       costume: costumeList,
-      accessories: c.accessories || [],
-      signatureProps: c.accessories || [],
+      accessories: Array.isArray(c.accessories)
+        ? c.accessories
+        : (typeof c.accessories === 'string' && c.accessories.trim() ? [c.accessories.trim()] : []),
+      signatureProps: Array.isArray(c.accessories)
+        ? c.accessories
+        : (typeof c.accessories === 'string' && c.accessories.trim() ? [c.accessories.trim()] : []),
       continuityRules,
       faceLocked: isProphet ? false : (c.face_identity_locked ?? true),
       prophetRestrictions: isProphet,

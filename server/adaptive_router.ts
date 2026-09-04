@@ -178,9 +178,10 @@ export function isFatalNonRecoverableError(err: any): boolean {
 }
 
 export function isRateLimitOrQuotaError(err: any): boolean {
-  const msg = (err?.message || '').toLowerCase();
-  const status = err?.status;
-  if (status === 429 || status === 503 || status === 504 || status === 502) {
+  if (!err) return false;
+  const msg = (typeof err === 'string' ? err : (err?.message || JSON.stringify(err) || '')).toLowerCase();
+  const status = err?.status || err?.code || err?.statusCode || err?.error?.code || err?.error?.status;
+  if (status === 429 || status === 503 || status === 504 || status === 502 || status === 'UNAVAILABLE') {
     return true;
   }
   if (
@@ -189,7 +190,11 @@ export function isRateLimitOrQuotaError(err: any): boolean {
     msg.includes('exhausted') ||
     msg.includes('unavailable') ||
     msg.includes('high demand') ||
+    msg.includes('spikes in demand') ||
     msg.includes('overloaded') ||
+    msg.includes('try again later') ||
+    msg.includes('temporary') ||
+    msg.includes('503') ||
     msg.includes('timeout')
   ) {
     return true;

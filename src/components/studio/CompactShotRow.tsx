@@ -9,7 +9,7 @@ interface CompactShotRowProps {
   onDoubleClick: () => void;
 }
 
-export const CompactShotRow: React.FC<CompactShotRowProps> = ({ shot, index, isSelected, onSelect, onDoubleClick }) => {
+export const CompactShotRow: React.FC<CompactShotRowProps> = React.memo(({ shot, index, isSelected, onSelect, onDoubleClick }) => {
   return (
     <div
       onClick={onSelect}
@@ -27,4 +27,4 @@ export const CompactShotRow: React.FC<CompactShotRowProps> = ({ shot, index, isS
       <div className="truncate">{shot.camera_movement || 'Static'}</div>
     </div>
   );
-};
+});

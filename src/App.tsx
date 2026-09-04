@@ -3,37 +3,36 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { TopBar } from './components/TopBar';
 import { Sidebar } from './components/Sidebar';
-import { NewProjectForm } from './components/NewProjectForm';
-import { ProjectListModal } from './components/ProjectListModal';
-import { GoogleDriveExportModal } from './components/GoogleDriveExportModal';
-import { GoogleDriveImportModal } from './components/GoogleDriveImportModal';
-import { CommandPalette } from './components/CommandPalette';
-import { NotificationCenter } from './components/NotificationCenter';
-import { VersionHistoryModal } from './components/VersionHistoryModal';
-
-// Top-Level Main Views
 import { MainDashboardView } from './components/MainDashboardView';
-import { ProductionProjectsView } from './components/ProductionProjectsView';
-
-// Workspaces
-import { ProjectDashboardWorkspace } from './components/workspaces/ProjectDashboardWorkspace';
-import { StoryWorkspace } from './components/workspaces/StoryWorkspace';
-import { SceneWorkspace } from './components/workspaces/SceneWorkspace';
-import { ShotWorkspace } from './components/workspaces/ShotWorkspace';
-import { CharacterBibleWorkspace } from './components/workspaces/CharacterBibleWorkspace';
-import { LocationBibleWorkspace } from './components/workspaces/LocationBibleWorkspace';
-import { AssetBibleWorkspace } from './components/workspaces/AssetBibleWorkspace';
-import { ContinuityWorkspace } from './components/workspaces/ContinuityWorkspace';
-import { PipelineOrchestratorWorkspace } from './components/workspaces/PipelineOrchestratorWorkspace';
-import { PromptStudioWorkspace } from './components/workspaces/PromptStudioWorkspace';
-import { GenerationQueueWorkspace } from './components/workspaces/GenerationQueueWorkspace';
-import { SettingsWorkspace } from './components/workspaces/SettingsWorkspace';
-import { ExportWorkspace } from './components/workspaces/ExportWorkspace';
-import { UnifiedStudioLayout } from './components/studio/UnifiedStudioLayout';
 import { ArrowLeft, Loader2 } from 'lucide-react';
+
+// Lazy-loaded Views and Modals for Optimized TTI & Code Splitting
+const ProductionProjectsView = React.lazy(() => import('./components/ProductionProjectsView').then(m => ({ default: m.ProductionProjectsView })));
+const ProjectListModal = React.lazy(() => import('./components/ProjectListModal').then(m => ({ default: m.ProjectListModal })));
+const GoogleDriveExportModal = React.lazy(() => import('./components/GoogleDriveExportModal').then(m => ({ default: m.GoogleDriveExportModal })));
+const GoogleDriveImportModal = React.lazy(() => import('./components/GoogleDriveImportModal').then(m => ({ default: m.GoogleDriveImportModal })));
+const CommandPalette = React.lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })));
+const NotificationCenter = React.lazy(() => import('./components/NotificationCenter').then(m => ({ default: m.NotificationCenter })));
+const VersionHistoryModal = React.lazy(() => import('./components/VersionHistoryModal').then(m => ({ default: m.VersionHistoryModal })));
+
+// Lazy-loaded Studio & Workspaces
+const UnifiedStudioLayout = React.lazy(() => import('./components/studio/UnifiedStudioLayout').then(m => ({ default: m.UnifiedStudioLayout })));
+const ProjectDashboardWorkspace = React.lazy(() => import('./components/workspaces/ProjectDashboardWorkspace').then(m => ({ default: m.ProjectDashboardWorkspace })));
+const StoryWorkspace = React.lazy(() => import('./components/workspaces/StoryWorkspace').then(m => ({ default: m.StoryWorkspace })));
+const SceneWorkspace = React.lazy(() => import('./components/workspaces/SceneWorkspace').then(m => ({ default: m.SceneWorkspace })));
+const ShotWorkspace = React.lazy(() => import('./components/workspaces/ShotWorkspace').then(m => ({ default: m.ShotWorkspace })));
+const CharacterBibleWorkspace = React.lazy(() => import('./components/workspaces/CharacterBibleWorkspace').then(m => ({ default: m.CharacterBibleWorkspace })));
+const LocationBibleWorkspace = React.lazy(() => import('./components/workspaces/LocationBibleWorkspace').then(m => ({ default: m.LocationBibleWorkspace })));
+const AssetBibleWorkspace = React.lazy(() => import('./components/workspaces/AssetBibleWorkspace').then(m => ({ default: m.AssetBibleWorkspace })));
+const ContinuityWorkspace = React.lazy(() => import('./components/workspaces/ContinuityWorkspace').then(m => ({ default: m.ContinuityWorkspace })));
+const PipelineOrchestratorWorkspace = React.lazy(() => import('./components/workspaces/PipelineOrchestratorWorkspace').then(m => ({ default: m.PipelineOrchestratorWorkspace })));
+const PromptStudioWorkspace = React.lazy(() => import('./components/workspaces/PromptStudioWorkspace').then(m => ({ default: m.PromptStudioWorkspace })));
+const GenerationQueueWorkspace = React.lazy(() => import('./components/workspaces/GenerationQueueWorkspace').then(m => ({ default: m.GenerationQueueWorkspace })));
+const SettingsWorkspace = React.lazy(() => import('./components/workspaces/SettingsWorkspace').then(m => ({ default: m.SettingsWorkspace })));
+const ExportWorkspace = React.lazy(() => import('./components/workspaces/ExportWorkspace').then(m => ({ default: m.ExportWorkspace })));
 
 import {
   Project,
@@ -122,8 +121,12 @@ export default function App() {
     }
   }, []);
 
+  const inFlightProjectLoadRef = useRef<string | null>(null);
+
   // Fetch full project data by ID
   const loadProjectDetails = useCallback(async (projectId: string, skipTabReset = false) => {
+    if (inFlightProjectLoadRef.current === projectId) return;
+    inFlightProjectLoadRef.current = projectId;
     setIsLoadingProjectDetails(true);
     try {
       const res = await fetch(`/api/projects/${projectId}`);
@@ -160,13 +163,21 @@ export default function App() {
     } catch (err) {
       console.error('Failed to load project details:', err);
     } finally {
+      inFlightProjectLoadRef.current = null;
       setIsLoadingProjectDetails(false);
     }
   }, []);
 
   // Set up SSE stream for real-time orchestrator updates
   useEffect(() => {
-    if (!currentProject) return;
+    // Only connect when project is actively generating/processing
+    if (!currentProject || currentProject.status !== 'processing') {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+      return;
+    }
 
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -216,7 +227,7 @@ export default function App() {
     return () => {
       sse.close();
     };
-  }, [currentProject?.id, loadProjectDetails, fetchProjects]);
+  }, [currentProject?.id, currentProject?.status, loadProjectDetails, fetchProjects]);
 
   // Initial load
   useEffect(() => {
@@ -434,7 +445,7 @@ export default function App() {
    * but this UI no longer depends on that compatibility layer.
    */
   const handleRunShotPrompt = async (shotId: string, target: PromptTarget) => {
-    if (!currentProject) return;
+    if (!currentProject || processingShotId === shotId) return;
     setProcessingShotId(shotId);
     setShotPromptError((prev) => {
       const next = { ...prev };
@@ -448,7 +459,25 @@ export default function App() {
         body: JSON.stringify({ target }),
       });
       if (res.ok) {
-        await loadProjectDetails(currentProject.id, true);
+        const body = await res.json().catch(() => null);
+        if (body && body.shot) {
+          // Direct local state patch - avoids refetching the entire project payload
+          setShots((prev) => {
+            const next = { ...prev };
+            for (const scId of Object.keys(next)) {
+              next[scId] = next[scId].map((s) => (s.id === shotId ? { ...s, ...body.shot } : s));
+            }
+            return next;
+          });
+          if (body.prompts && Array.isArray(body.prompts)) {
+            setVideoPrompts((prev) => ({
+              ...prev,
+              [shotId]: body.prompts,
+            }));
+          }
+        } else {
+          await loadProjectDetails(currentProject.id, true);
+        }
       } else {
         // 400 INVALID_PROMPT_TARGET / 422 contract failure: nothing was
         // persisted server-side, so surface the error instead of a stale prompt.
@@ -479,7 +508,7 @@ export default function App() {
     reason = 'FULL',
     requireAi = false
   ) => {
-    if (!currentProject) return;
+    if (!currentProject || processingShotId === shotId) return;
     setProcessingShotId(shotId);
     setShotPromptError((prev) => {
       const next = { ...prev };
@@ -498,7 +527,24 @@ export default function App() {
         }),
       });
       if (res.ok) {
-        await loadProjectDetails(currentProject.id, true);
+        const body = await res.json().catch(() => null);
+        if (body && body.shot) {
+          setShots((prev) => {
+            const next = { ...prev };
+            for (const scId of Object.keys(next)) {
+              next[scId] = next[scId].map((s) => (s.id === shotId ? { ...s, ...body.shot } : s));
+            }
+            return next;
+          });
+          if (body.prompts && Array.isArray(body.prompts)) {
+            setVideoPrompts((prev) => ({
+              ...prev,
+              [shotId]: body.prompts,
+            }));
+          }
+        } else {
+          await loadProjectDetails(currentProject.id, true);
+        }
       } else {
         const body = await res.json().catch(() => ({}));
         setShotPromptError((prev) => ({
@@ -617,20 +663,25 @@ export default function App() {
           </div>
         )}
 
-        {mainMode === 'production' && (
-          <div className="flex-1 overflow-y-auto bg-[#090B10]">
-            <ProductionProjectsView
-              projects={projects}
-              activeProjectId={currentProject?.id || null}
-              onSelectProject={(id) => {
-                loadProjectDetails(id);
-              }}
-              onDeleteProject={handleDeleteProject}
-              onCreateProject={handleCreateProject}
-              isCreating={isCreating}
-            />
+        <Suspense fallback={
+          <div className="flex-1 flex items-center justify-center bg-[#090B10]">
+            <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
           </div>
-        )}
+        }>
+          {mainMode === 'production' && (
+            <div className="flex-1 overflow-y-auto bg-[#090B10]">
+              <ProductionProjectsView
+                projects={projects}
+                activeProjectId={currentProject?.id || null}
+                onSelectProject={(id) => {
+                  loadProjectDetails(id);
+                }}
+                onDeleteProject={handleDeleteProject}
+                onCreateProject={handleCreateProject}
+                isCreating={isCreating}
+              />
+            </div>
+          )}
 
         {mainMode === 'studio' && (
           <>
@@ -799,77 +850,90 @@ export default function App() {
             )}
           </>
         )}
+        </Suspense>
       </div>
 
-      {/* Modals & Overlays */}
-      <ProjectListModal
-        isOpen={isProjectsModalOpen}
-        onClose={() => setIsProjectsModalOpen(false)}
-        projects={projects}
-        currentProjectId={currentProject?.id || null}
-        onSelectProject={(projId) => loadProjectDetails(projId)}
-        onDeleteProject={handleDeleteProject}
-        onNewProject={() => {
-          setCurrentProject(null);
-        }}
-        onOpenImport={() => setIsDriveImportOpen(true)}
-      />
+      {/* Modals & Overlays - Lazy and strictly rendered when open */}
+      <Suspense fallback={null}>
+        {isProjectsModalOpen && (
+          <ProjectListModal
+            isOpen={isProjectsModalOpen}
+            onClose={() => setIsProjectsModalOpen(false)}
+            projects={projects}
+            currentProjectId={currentProject?.id || null}
+            onSelectProject={(projId) => loadProjectDetails(projId)}
+            onDeleteProject={handleDeleteProject}
+            onNewProject={() => {
+              setCurrentProject(null);
+            }}
+            onOpenImport={() => setIsDriveImportOpen(true)}
+          />
+        )}
 
-      {currentProject && (
-        <GoogleDriveExportModal
-          isOpen={isDriveExportOpen}
-          onClose={() => setIsDriveExportOpen(false)}
-          projectData={{
-            project: currentProject,
-            foundation,
-            characters,
-            locations,
-            objects,
-            scenes,
-            shots,
-            videoPrompts,
-            exportedAt: new Date().toISOString(),
-          }}
-        />
-      )}
+        {isDriveExportOpen && currentProject && (
+          <GoogleDriveExportModal
+            isOpen={isDriveExportOpen}
+            onClose={() => setIsDriveExportOpen(false)}
+            projectData={{
+              project: currentProject,
+              foundation,
+              characters,
+              locations,
+              objects,
+              scenes,
+              shots,
+              videoPrompts,
+              exportedAt: new Date().toISOString(),
+            }}
+          />
+        )}
 
-      <GoogleDriveImportModal
-        isOpen={isDriveImportOpen}
-        onClose={() => setIsDriveImportOpen(false)}
-        onImportSuccess={handleImportSuccess}
-      />
+        {isDriveImportOpen && (
+          <GoogleDriveImportModal
+            isOpen={isDriveImportOpen}
+            onClose={() => setIsDriveImportOpen(false)}
+            onImportSuccess={handleImportSuccess}
+          />
+        )}
 
-      <CommandPalette
-        isOpen={isCommandPaletteOpen}
-        onClose={() => setIsCommandPaletteOpen(false)}
-        project={currentProject}
-        scenes={scenes}
-        characters={characters}
-        locations={locations}
-        objects={objects}
-        onNavigate={(tab) => {
-          if (!currentProject) return;
-          setActiveTab(tab);
-        }}
-        onNewProject={() => {
-          setCurrentProject(null);
-        }}
-        onOpenProjects={() => setIsProjectsModalOpen(true)}
-        onOpenExport={() => setIsDriveExportOpen(true)}
-        onRetryPipeline={handleRetryPipeline}
-      />
+        {isCommandPaletteOpen && (
+          <CommandPalette
+            isOpen={isCommandPaletteOpen}
+            onClose={() => setIsCommandPaletteOpen(false)}
+            project={currentProject}
+            scenes={scenes}
+            characters={characters}
+            locations={locations}
+            objects={objects}
+            onNavigate={(tab) => {
+              if (!currentProject) return;
+              setActiveTab(tab);
+            }}
+            onNewProject={() => {
+              setCurrentProject(null);
+            }}
+            onOpenProjects={() => setIsProjectsModalOpen(true)}
+            onOpenExport={() => setIsDriveExportOpen(true)}
+            onRetryPipeline={handleRetryPipeline}
+          />
+        )}
 
-      <NotificationCenter
-        isOpen={isNotificationCenterOpen}
-        onClose={() => setIsNotificationCenterOpen(false)}
-        logs={logs}
-        onRetryStage={handleRetryPipeline}
-      />
+        {isNotificationCenterOpen && (
+          <NotificationCenter
+            isOpen={isNotificationCenterOpen}
+            onClose={() => setIsNotificationCenterOpen(false)}
+            logs={logs}
+            onRetryStage={handleRetryPipeline}
+          />
+        )}
 
-      <VersionHistoryModal
-        isOpen={isVersionModalOpen}
-        onClose={() => setIsVersionModalOpen(false)}
-      />
+        {isVersionModalOpen && (
+          <VersionHistoryModal
+            isOpen={isVersionModalOpen}
+            onClose={() => setIsVersionModalOpen(false)}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

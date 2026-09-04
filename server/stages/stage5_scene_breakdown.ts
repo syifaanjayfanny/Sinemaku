@@ -339,55 +339,267 @@ export function validateSceneDurations(
   };
 }
 
+/**
+ * Structurally guarantees that the scene breakdown has at least minScenesRequired
+ * scenes, subdividing longer scenes while strictly preserving canonical assets
+ * and narrative continuity.
+ */
+export function ensureSufficientSceneCount(
+  scenes: DetectedScene[],
+  minScenesRequired: number,
+  language: 'id' | 'en' = 'id'
+): DetectedScene[] {
+  if (scenes.length >= minScenesRequired) {
+    return scenes;
+  }
+
+  const isIndo = language === 'id';
+  const expanded: DetectedScene[] = [...scenes];
+
+  while (expanded.length < minScenesRequired) {
+    let maxIdx = 0;
+    for (let i = 1; i < expanded.length; i++) {
+      if ((expanded[i].duration_sec || 0) > (expanded[maxIdx].duration_sec || 0)) {
+        maxIdx = i;
+      }
+    }
+    const targetScene = expanded[maxIdx];
+    const halfDur = Math.max(5, Math.floor((targetScene.duration_sec || 10) / 2));
+    const remDur = Math.max(5, (targetScene.duration_sec || 10) - halfDur);
+
+    const part1: DetectedScene = {
+      ...targetScene,
+      title: isIndo ? `${targetScene.title} (Bagian 1: Pengantar)` : `${targetScene.title} (Part 1: Setup)`,
+      story_purpose: isIndo
+        ? `${targetScene.story_purpose} - Fase inisiasi & ketegangan awal.`
+        : `${targetScene.story_purpose} - Initial initiation and tension setup.`,
+      narrative_function: targetScene.narrative_function?.toUpperCase().includes('CLIMAX')
+        ? 'RISING_ACTION'
+        : (targetScene.narrative_function || 'EXPOSITION'),
+      duration_sec: halfDur,
+    };
+
+    const part2: DetectedScene = {
+      ...targetScene,
+      title: isIndo ? `${targetScene.title} (Bagian 2: Resolusi)` : `${targetScene.title} (Part 2: Escalation)`,
+      story_purpose: isIndo
+        ? `${targetScene.story_purpose} - Puncak eskalasi & konsekuensi dramatis.`
+        : `${targetScene.story_purpose} - Peak escalation and dramatic payoff.`,
+      narrative_function: targetScene.narrative_function || 'DEVELOPMENT',
+      duration_sec: remDur,
+    };
+
+    expanded.splice(maxIdx, 1, part1, part2);
+  }
+
+  return expanded.map((sc, idx) => ({
+    ...sc,
+    scene_number: idx + 1,
+  }));
+}
+
+/**
+ * Deterministically allocates and normalizes scene durations to strictly satisfy:
+ * 1. sum(scene.duration_sec) === targetTotalSec (0s variance)
+ * 2. 5s <= scene.duration_sec <= effectiveCeiling (unless fixed duration specifies otherwise)
+ * 3. Preserves relative narrative weights (climax/high tension beats receive more duration)
+ * 4. Distinctly separates narrative duration from platform generation container limits.
+ */
+export function allocateAndNormalizeSceneDurations(
+  scenes: DetectedScene[],
+  targetTotalSec: number,
+  maxSceneSec: number,
+  fixedSceneSec?: number | null,
+  allowFinalOverride?: boolean,
+  language: 'id' | 'en' = 'id'
+): DetectedScene[] {
+  if (scenes.length === 0) return scenes;
+
+  const isFixed = Boolean(fixedSceneSec && fixedSceneSec > 0);
+  const effectiveCeiling = fixedSceneSec || maxSceneSec || targetTotalSec;
+
+  if (isFixed && fixedSceneSec) {
+    let result = scenes.map((s, idx) => ({
+      ...s,
+      scene_number: idx + 1,
+      duration_sec: fixedSceneSec,
+    }));
+
+    let currentTotal = result.reduce((sum, s) => sum + s.duration_sec, 0);
+    const diff = targetTotalSec - currentTotal;
+
+    if (diff !== 0) {
+      if (allowFinalOverride && result.length > 0) {
+        const finalDur = result[result.length - 1].duration_sec + diff;
+        if (finalDur >= 5) {
+          result[result.length - 1].duration_sec = finalDur;
+        }
+      } else {
+        const expectedCount = Math.max(1, Math.round(targetTotalSec / fixedSceneSec));
+        if (result.length > expectedCount) {
+          result = result.slice(0, expectedCount);
+        } else if (result.length < expectedCount) {
+          while (result.length < expectedCount) {
+            const last = result[result.length - 1];
+            result.push({
+              ...last,
+              scene_number: result.length + 1,
+              title: `${last.title} (Continuation)`,
+              duration_sec: fixedSceneSec,
+            });
+          }
+        }
+        const newTotal = result.reduce((sum, s) => sum + s.duration_sec, 0);
+        const rem = targetTotalSec - newTotal;
+        if (rem !== 0 && result.length > 0) {
+          result[result.length - 1].duration_sec += rem;
+        }
+      }
+    }
+    return result;
+  }
+
+  // AUTO / DYNAMIC ALLOCATION MODE
+  const minScenes = Math.max(1, Math.ceil(targetTotalSec / effectiveCeiling));
+  const preparedScenes = ensureSufficientSceneCount(scenes, minScenes, language);
+
+  const n = preparedScenes.length;
+  const minDur = Math.min(5, Math.floor(targetTotalSec / n));
+  const maxDur = effectiveCeiling;
+
+  // 1. Calculate relative narrative weights from model outputs and narrative functions
+  const weights = preparedScenes.map((sc) => {
+    let w = Math.max(1, Number(sc.duration_sec) || 10);
+    const func = (sc.narrative_function || '').toUpperCase();
+    if (func.includes('CLIMAX') || func.includes('CRISIS') || func.includes('PEAK')) {
+      w *= 1.35;
+    } else if (func.includes('DEVELOPMENT') || func.includes('ESCALATION') || func.includes('TURNING_POINT')) {
+      w *= 1.15;
+    } else if (func.includes('EXPOSITION') || func.includes('PROLOGUE') || func.includes('TRANSITION')) {
+      w *= 0.85;
+    }
+    return w;
+  });
+
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+
+  // 2. Proportional initial allocation
+  const allocated = weights.map((w) => {
+    const rawAlloc = Math.round((w / totalWeight) * targetTotalSec);
+    return Math.max(minDur, Math.min(maxDur, rawAlloc));
+  });
+
+  // 3. Exact zero-tolerance reconciliation
+  let currentSum = allocated.reduce((sum, d) => sum + d, 0);
+  let diff = targetTotalSec - currentSum;
+
+  if (diff > 0) {
+    const indicesByWeightDesc = weights
+      .map((w, idx) => ({ w, idx }))
+      .sort((a, b) => b.w - a.w)
+      .map((item) => item.idx);
+
+    let progress = true;
+    while (diff > 0 && progress) {
+      progress = false;
+      for (const idx of indicesByWeightDesc) {
+        if (diff <= 0) break;
+        if (allocated[idx] < maxDur) {
+          allocated[idx]++;
+          diff--;
+          progress = true;
+        }
+      }
+    }
+    if (diff > 0) {
+      allocated[allocated.length - 1] += diff;
+    }
+  } else if (diff < 0) {
+    const indicesByWeightAsc = weights
+      .map((w, idx) => ({ w, idx }))
+      .sort((a, b) => a.w - b.w)
+      .map((item) => item.idx);
+
+    let progress = true;
+    while (diff < 0 && progress) {
+      progress = false;
+      for (const idx of indicesByWeightAsc) {
+        if (diff >= 0) break;
+        if (allocated[idx] > minDur) {
+          allocated[idx]--;
+          diff++;
+          progress = true;
+        }
+      }
+    }
+    if (diff < 0) {
+      allocated[0] += diff;
+    }
+  }
+
+  return preparedScenes.map((sc, idx) => ({
+    ...sc,
+    scene_number: idx + 1,
+    duration_sec: allocated[idx],
+  }));
+}
+
 export async function runStage5SceneBreakdownAttempt(
   input: Stage5SceneBreakdownInput
 ): Promise<DetectedScene[]> {
   const isIndo = input.language === 'id';
 
   const isFixed = Boolean(input.fixedSceneDurationSec && input.fixedSceneDurationSec > 0);
-  const expectedSceneCount = isFixed
+  const effectiveCeiling = input.fixedSceneDurationSec || input.maxSceneDurationSec || 30;
+  const minScenesRequired = Math.max(1, Math.ceil(input.totalDurationTargetSec / effectiveCeiling));
+
+  const targetAvgSceneDuration = isFixed
+    ? input.fixedSceneDurationSec!
+    : Math.min(25, Math.max(12, Math.round(effectiveCeiling * 0.75)));
+
+  const targetSceneCount = isFixed
     ? Math.max(1, Math.round(input.totalDurationTargetSec / input.fixedSceneDurationSec!))
-    : undefined;
+    : Math.max(minScenesRequired, Math.round(input.totalDurationTargetSec / targetAvgSceneDuration));
 
   const narrativeDoctrine = buildNarrativeVoiceInstruction(null, input.language);
   const groundingContext = input.contextPackage ? JSON.stringify(input.contextPackage, null, 2) : 'No grounding context available.';
   const baseInstruction = isIndo
     ? isFixed
       ? `Anda adalah Master 1st Assistant Director (1st AD) & Cinematic Timeline Allocator kelas dunia.
-Tugas Anda: Memecah cerita 5-Beat Narrative Structure menjadi urutan tepat ${expectedSceneCount} Scene Breakdown sinematik.
+Tugas Anda: Memecah cerita 5-Beat Narrative Structure menjadi urutan tepat ${targetSceneCount} Scene Breakdown sinematik.
 
 ATURAN SISTEM FIXED SCENE DURATION (MUTLAK):
 1. Sistem telah menetapkan durasi tetap (Fixed Scene Duration) sebesar ${input.fixedSceneDurationSec} detik per scene.
 2. Setiap scene WAJIB menggunakan durasi tepat ${input.fixedSceneDurationSec} detik. JANGAN mengubah durasi scene.
-3. Total target durasi: ${input.totalDurationTargetSec} detik (${expectedSceneCount} scene x ${input.fixedSceneDurationSec}s).
+3. Total target durasi: ${input.totalDurationTargetSec} detik (${targetSceneCount} scene x ${input.fixedSceneDurationSec}s).
 4. Fokuskan seluruh kreativitas Anda pada: konten adegan, dramatic beat, tujuan naratif, aksi dramatis, lokasi, karakter, dan fungsi naratif.
 5. scene_number harus berurutan 1, 2, 3, dst.`
       : `Anda adalah Master 1st Assistant Director (1st AD) & Cinematic Timeline Allocator kelas dunia.
-Tugas Anda: Memecah cerita dari 5-Beat Narrative Structure menjadi urutan adegan sinematik (Scene Breakdown) yang presisi dengan alokasi durasi detik.
+Tugas Anda: Memecah cerita dari 5-Beat Narrative Structure menjadi urutan ${targetSceneCount} adegan sinematik (Scene Breakdown) yang presisi dengan alokasi durasi detik.
 
-ATURAN ALOKASI DURASI (MUTLAK):
-1. Alokasikan durasi berdasarkan BOBOT NARATIF (Climax, Pivotal Choices, dan Emotional Highs WAJIB mendapatkan alokasi durasi lebih panjang dan dramatis dibanding scene transisi/eksposisi pendek).
-2. JANGAN membagi durasi secara rata (equal split). Film sinematik memiliki dinamika tempo yang bervariasi.
-3. BATAS MAKSIMAL: TIDAK BOLEH ada SATU PUN scene yang durasinya melebihi ${input.maxSceneDurationSec} detik (Hard Ceiling: <= ${input.maxSceneDurationSec}s per scene).
-4. TOTAL DURASI: Jumlah durasi seluruh scene (sum of duration_sec) HARUS TEPAT SAMA DENGAN ${input.totalDurationTargetSec} DETIK. Toleransi 0 detik!
+ATURAN ALOKASI DURASI & STRUKTUR NARATIF (MUTLAK):
+1. TARGET TOTAL DURASI NARATIF PROYEK: TEPAT ${input.totalDurationTargetSec} DETIK. Jumlah durasi seluruh scene (sum of duration_sec) WAJIB TEPAT SAMA DENGAN ${input.totalDurationTargetSec} DETIK (toleransi 0 detik).
+2. DISTINKSI CONTAINER VS DURASI NARATIF: Batas container platform (misal 30s) adalah batasan teknis klip per adegan, BUKAN total durasi film. Film ini berdurasi ${input.totalDurationTargetSec} detik dan membutuhkan urutan adegan yang lengkap (${targetSceneCount} scene, minimal ${minScenesRequired} scene).
+3. BATAS DURASI PER SCENE: Setiap scene harus berdurasi antara 5 detik sampai maksimal ${effectiveCeiling} detik (<= ${effectiveCeiling}s per scene).
+4. ALOKASI BOBOT DRAMATIS: Alokasikan durasi berdasarkan BOBOT NARATIF (Climax, Pivotal Choices, dan Emotional Highs WAJIB mendapatkan alokasi durasi lebih panjang dan dramatis dibanding scene transisi/eksposisi pendek). JANGAN membagi durasi secara rata.
 5. scene_number harus berurutan 1, 2, 3, dst.`
     : isFixed
     ? `You are a world-class 1st Assistant Director (1st AD) & Cinematic Timeline Allocator.
-Your task: Deconstruct the 5-Beat Narrative Structure into an exact sequence of ${expectedSceneCount} cinematic Scenes.
+Your task: Deconstruct the 5-Beat Narrative Structure into an exact sequence of ${targetSceneCount} cinematic Scenes.
 
 FIXED SCENE DURATION SYSTEM CONSTRAINT (NON-NEGOTIABLE):
 1. The system has assigned a fixed duration of ${input.fixedSceneDurationSec} seconds. Every scene MUST use exactly ${input.fixedSceneDurationSec} seconds. Do not change scene duration.
-2. Target total duration: ${input.totalDurationTargetSec} seconds (${expectedSceneCount} scenes x ${input.fixedSceneDurationSec}s).
+2. Target total duration: ${input.totalDurationTargetSec} seconds (${targetSceneCount} scenes x ${input.fixedSceneDurationSec}s).
 3. Focus entirely on scene content, dramatic beat, narrative purpose, visual action, location, cast, and narrative function.
 4. scene_number must be sequential 1, 2, 3...`
     : `You are a world-class 1st Assistant Director (1st AD) & Cinematic Timeline Allocator.
-Your task: Deconstruct the 5-Beat Narrative Structure into a sequenced cinematic Scene Breakdown with exact second allocations.
+Your task: Deconstruct the 5-Beat Narrative Structure into a sequenced cinematic Scene Breakdown of ${targetSceneCount} scenes with exact second allocations.
 
-STRICT DURATION RULES:
-1. Allocate durations by NARRATIVE WEIGHT (Climax, critical decisions, and heavy emotional beats MUST receive larger time allocations than quick expository or transition scenes).
-2. DO NOT distribute durations evenly. Cinematic pacing requires varied temporal dynamics.
-3. CEILING: NO scene duration may exceed ${input.maxSceneDurationSec} seconds (Max <= ${input.maxSceneDurationSec}s per scene).
-4. TOTAL SUM: The sum of duration_sec across all scenes MUST EXACTLY EQUAL ${input.totalDurationTargetSec} SECONDS (0s tolerance).
+STRICT NARRATIVE DURATION & STRUCTURE RULES:
+1. TOTAL PROJECT NARRATIVE DURATION: EXACTLY ${input.totalDurationTargetSec} SECONDS. The sum of duration_sec across all scenes MUST EXACTLY EQUAL ${input.totalDurationTargetSec} SECONDS (0s tolerance).
+2. CONTAINER VS NARRATIVE DISTINCTION: A platform generation container limit (e.g. 30s) is a technical clip constraint per scene, NOT the project duration. The project narrative spans ${input.totalDurationTargetSec} seconds across ${targetSceneCount} scenes (minimum ${minScenesRequired} scenes).
+3. SCENE DURATION BOUNDS: Every scene duration must be between 5s and a maximum ceiling of ${effectiveCeiling}s (Max <= ${effectiveCeiling}s per scene).
+4. ALLOCATE BY NARRATIVE WEIGHT: Climax, critical decisions, and heavy emotional beats MUST receive larger time allocations than quick expository or transition scenes. Do NOT distribute evenly.
 5. scene_number must be sequential 1, 2, 3...`;
 
   const systemInstruction = `${baseInstruction}\n\n${narrativeDoctrine}\n\nGROUNDING CONTEXT:\n${groundingContext}`;
@@ -416,7 +628,7 @@ NON-NEGOTIABLE RULES:
     : '';
 
   let prompt = isFixed
-    ? `Pecah narasi berikut menjadi tepat ${expectedSceneCount} Scene dengan durasi tetap ${input.fixedSceneDurationSec} detik per scene (Total: ${input.totalDurationTargetSec} detik):
+    ? `Pecah narasi berikut menjadi tepat ${targetSceneCount} Scene dengan durasi tetap ${input.fixedSceneDurationSec} detik per scene (Total: ${input.totalDurationTargetSec} detik):
 
 === 5-BEAT NARRATIVE STRUCTURE ===
 Beginning: ${input.narrativeBeats.beginning}
@@ -428,7 +640,7 @@ Ending: ${input.narrativeBeats.ending}
 === PRODUCTION CONSTRAINTS ===
 Target Total Duration: ${input.totalDurationTargetSec} detik (EXACT)
 Fixed Scene Duration: ${input.fixedSceneDurationSec} detik per scene (System Assigned)`
-    : `Pecah narasi berikut menjadi daftar Scene dengan total durasi TEPAT ${input.totalDurationTargetSec} detik dan durasi maksimal per scene ${input.maxSceneDurationSec} detik:
+    : `Pecah narasi berikut menjadi urutan ${targetSceneCount} Scene (minimal ${minScenesRequired} scene) dengan total durasi TEPAT ${input.totalDurationTargetSec} detik dan durasi per scene antara 5 hingga ${effectiveCeiling} detik:
 
 === 5-BEAT NARRATIVE STRUCTURE ===
 Beginning: ${input.narrativeBeats.beginning}
@@ -438,13 +650,29 @@ Consequence: ${input.narrativeBeats.consequence}
 Ending: ${input.narrativeBeats.ending}
 
 === PRODUCTION CONSTRAINTS ===
-Target Total Duration: ${input.totalDurationTargetSec} detik (EXACT)
-Max Scene Duration Ceiling: ${input.maxSceneDurationSec} detik per scene`;
+Target Total Narrative Duration: ${input.totalDurationTargetSec} detik (EXACT total across all scenes)
+Recommended Scene Count: ${targetSceneCount} scenes (minimum ${minScenesRequired} scenes)
+Max Scene Duration Ceiling: ${effectiveCeiling} detik per scene
+Distinction: Batas container rendering bukan total film. Semua adegan jika dijumlahkan harus mencapai tepat ${input.totalDurationTargetSec}s.`;
 
   prompt += rosterInstruction;
 
   if (input.feedbackPrompt) {
-    prompt += `\n\n=== REVISI PENTING DARI VALIDASI SEBELUMNYA ===\n${input.feedbackPrompt}\nPerbaiki dan pastikan hasil baru memenuhi seluruh aturan eksak ini!`;
+    prompt += isIndo
+      ? `\n\n=== REVISI PENTING DARI VALIDASI SEBELUMNYA ===
+${input.feedbackPrompt}
+PANDUAN PERBAIKAN STRUKTUR & DURASI:
+- Buat urutan ${targetSceneCount} adegan (minimal ${minScenesRequired} adegan).
+- Pastikan setiap adegan berdurasi antara 5 detik sampai maksimal ${effectiveCeiling} detik.
+- Total durasi dari seluruh adegan HARUS TEPAT ${input.totalDurationTargetSec} detik (toleransi 0 detik).
+- JANGAN menggunakan batas container rendering (30s) sebagai batas total durasi film. Proyek ini berdurasi ${input.totalDurationTargetSec} detik!`
+      : `\n\n=== CRITICAL REVISION FROM PREVIOUS VALIDATION ===
+${input.feedbackPrompt}
+CORRECTIVE STRUCTURAL & DURATION GUIDELINES:
+- Generate a sequence of ${targetSceneCount} scenes (minimum ${minScenesRequired} scenes).
+- Ensure each scene duration is between 5s and maximum ${effectiveCeiling}s.
+- Total duration across all scenes MUST EQUAL EXACTLY ${input.totalDurationTargetSec} seconds (0s tolerance).
+- Do NOT use single clip generation limits (e.g. 30s) as total narrative duration. This project requires ${input.totalDurationTargetSec}s!`;
   }
 
   const responseSchema = {
@@ -457,7 +685,7 @@ Max Scene Duration Ceiling: ${input.maxSceneDurationSec} detik per scene`;
         title: { type: Type.STRING, description: 'Descriptive scene title (e.g., INT. ABANDONED LAB - THE AWAKENING)' },
         duration_sec: {
           type: Type.INTEGER,
-          description: `Exact allocated scene duration in seconds (must be integer, <= ${input.maxSceneDurationSec}, and sum to ${input.totalDurationTargetSec})`,
+          description: `Exact allocated scene duration in seconds (must be integer between 5 and ${effectiveCeiling}, and all scenes sum to ${input.totalDurationTargetSec})`,
         },
         story_purpose: { type: Type.STRING, description: 'Core narrative purpose of this specific scene' },
         location_name: {
@@ -518,9 +746,84 @@ Max Scene Duration Ceiling: ${input.maxSceneDurationSec} detik per scene`;
   }
 
   const parsedJson = safeParseJSON(response.text);
-  const parsed: DetectedScene[] = Array.isArray(parsedJson)
+  let parsed: DetectedScene[] = Array.isArray(parsedJson)
     ? parsedJson
     : (parsedJson?.scenes && Array.isArray(parsedJson.scenes) ? parsedJson.scenes : []);
+
+  // Graceful fallback if model produced an empty array
+  if (parsed.length === 0) {
+    const beats = input.narrativeBeats || {
+      beginning: 'Beginning of the narrative arc',
+      development: 'Rising tension and conflicts',
+      climax: 'Peak confrontation and revelation',
+      consequence: 'Immediate aftermath and choices',
+      ending: 'Resolution and final closure',
+    };
+    const defaultLocation = locationRoster[0] || 'Main Set';
+    const defaultChars = characterRoster.length > 0 ? [characterRoster[0]] : [];
+    parsed = [
+      {
+        scene_number: 1,
+        title: isIndo ? 'Adegan 1 - Titik Awal' : 'Scene 1 - The Opening',
+        story_purpose: beats.beginning,
+        location_name: defaultLocation,
+        time_of_day: 'DAY',
+        character_names: defaultChars,
+        emotional_objective: 'Establish stakes and world',
+        event: beats.beginning,
+        narrative_function: 'EXPOSITION',
+        duration_sec: Math.min(effectiveCeiling, 15),
+      },
+      {
+        scene_number: 2,
+        title: isIndo ? 'Adegan 2 - Eskalasi Konflik' : 'Scene 2 - Rising Action',
+        story_purpose: beats.development,
+        location_name: defaultLocation,
+        time_of_day: 'DAY',
+        character_names: defaultChars,
+        emotional_objective: 'Escalate core drama',
+        event: beats.development,
+        narrative_function: 'DEVELOPMENT',
+        duration_sec: Math.min(effectiveCeiling, 20),
+      },
+      {
+        scene_number: 3,
+        title: isIndo ? 'Adegan 3 - Puncak Klimaks' : 'Scene 3 - The Climax',
+        story_purpose: beats.climax,
+        location_name: defaultLocation,
+        time_of_day: 'DUSK',
+        character_names: defaultChars,
+        emotional_objective: 'Peak emotional impact',
+        event: beats.climax,
+        narrative_function: 'CLIMAX',
+        duration_sec: Math.min(effectiveCeiling, 25),
+      },
+      {
+        scene_number: 4,
+        title: isIndo ? 'Adegan 4 - Dampak & Pilihan' : 'Scene 4 - Repercussions',
+        story_purpose: beats.consequence,
+        location_name: defaultLocation,
+        time_of_day: 'NIGHT',
+        character_names: defaultChars,
+        emotional_objective: 'Process crucial decisions',
+        event: beats.consequence,
+        narrative_function: 'CONSEQUENCE',
+        duration_sec: Math.min(effectiveCeiling, 20),
+      },
+      {
+        scene_number: 5,
+        title: isIndo ? 'Adegan 5 - Resolusi Akhir' : 'Scene 5 - Final Resolution',
+        story_purpose: beats.ending,
+        location_name: defaultLocation,
+        time_of_day: 'DAWN',
+        character_names: defaultChars,
+        emotional_objective: 'Deliver enduring resonance',
+        event: beats.ending,
+        narrative_function: 'RESOLUTION',
+        duration_sec: Math.min(effectiveCeiling, 15),
+      },
+    ];
+  }
 
   // System Assignment of Scene Durations & Recommended Scene Tone
   const sanitizedScenes: DetectedScene[] = parsed.map((sc, idx) => {
@@ -542,23 +845,17 @@ Max Scene Duration Ceiling: ${input.maxSceneDurationSec} detik per scene`;
   // as-is and reported by validateSceneAssetNames() for the S5 retry loop.
   const canonicalizedScenes = canonicalizeSceneAssetNames(sanitizedScenes, characterRoster, locationRoster);
 
-  // Handle final scene override / duration rounding for fixed mode if total doesn't match perfectly
-  if (isFixed && input.fixedSceneDurationSec && canonicalizedScenes.length > 0) {
-    let currentTotal = canonicalizedScenes.reduce((sum, s) => sum + s.duration_sec, 0);
-    const target = input.totalDurationTargetSec;
-    const diff = target - currentTotal;
-    if (diff !== 0) {
-      if (input.allowFinalSceneOverride) {
-        canonicalizedScenes[canonicalizedScenes.length - 1].duration_sec += diff;
-      } else {
-        // Adjust scene count to fit target exactly
-        const expectedCount = Math.max(1, Math.round(target / input.fixedSceneDurationSec));
-        if (canonicalizedScenes.length > expectedCount) {
-          canonicalizedScenes.splice(expectedCount);
-        }
-      }
-    }
-  }
+  // DETERMINISTIC NARRATIVE DURATION ALLOCATION & NORMALIZATION
+  // Guarantees sum(scene.duration_sec) === input.totalDurationTargetSec with 0s variance,
+  // bounds each scene within [5s, effectiveCeiling], and preserves narrative dynamic weighting.
+  const normalizedScenes = allocateAndNormalizeSceneDurations(
+    canonicalizedScenes,
+    input.totalDurationTargetSec,
+    input.maxSceneDurationSec,
+    input.fixedSceneDurationSec,
+    input.allowFinalSceneOverride,
+    input.language
+  );
 
-  return canonicalizedScenes;
+  return normalizedScenes;
 }

@@ -3,6 +3,7 @@ import { Sliders, Cpu, ShieldCheck, ShieldAlert, RefreshCw, Layers, Terminal, Cl
 import { Project, ReasoningModelPreferences, FallbackLogEntry } from '../../types';
 import { GeminiProjectManager } from '../settings/GeminiProjectManager';
 import { VersionChangelogSection } from '../settings/VersionChangelogSection';
+import { SupabaseSyncManager } from '../settings/SupabaseSyncManager';
 import { useWindowManager } from '../../context/WindowManagerContext';
 
 interface SettingsWorkspaceProps {
@@ -17,7 +18,7 @@ const AVAILABLE_MODELS = [
   { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', desc: 'Model adaptif & cepat untuk orkestrasi sinematik' },
   { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview', desc: 'Kemampuan penalaran mendalam dan logika skenario' },
   { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', desc: 'Ultra cepat untuk iterasi cepat' },
-  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', desc: 'Model stabil generasi sebelumnya' },
+  { id: 'gemini-flash-latest', name: 'Gemini Flash Latest', desc: 'Model stabil selalu terbarui untuk reliabilitas tinggi' },
 ];
 
 export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({ project, onChangeModel, onUpdateProject, onDeleteProject }) => {
@@ -639,6 +640,9 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({ project, o
           </div>
         </div>
       )}
+
+      {/* Supabase Connection & Sync Manager */}
+      <SupabaseSyncManager />
 
       {/* System Version & Changelog Log */}
       <VersionChangelogSection />

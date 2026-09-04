@@ -10,7 +10,6 @@ import {
   Scene,
   Shot,
 } from '../src/types';
-import { executeLLMRequest } from './llm_provider';
 
 /**
  * Cinematic Grammar mappings for Narrative Modes

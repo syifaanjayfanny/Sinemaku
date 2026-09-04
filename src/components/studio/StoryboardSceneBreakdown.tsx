@@ -239,8 +239,9 @@ ${sceneNeg}`;
     if (c.master_portrait_prompt && c.master_portrait_prompt.trim().length > 0)
       return c.master_portrait_prompt;
     const desc = c.physical_description || c.physical_appearance || 'historical figure';
+    const clothingStr = Array.isArray(c.clothing) ? c.clothing.filter(Boolean).join(', ') : (typeof c.clothing === 'string' ? c.clothing : '');
     let costume =
-      c.costume || c.wardrobe || (c.clothing?.length ? c.clothing.join(', ') : 'historical garments');
+      c.costume || c.wardrobe || (clothingStr.length > 0 ? clothingStr : 'historical garments');
     
     const nameLower = c.name.toLowerCase();
     const isHoly = nameLower.includes('sunan') || nameLower.includes('wali') || nameLower.includes('kyai') || nameLower.includes('habib') || nameLower.includes('ulama') || nameLower.includes('syekh') || nameLower.includes('sheikh') || nameLower.includes('nabi') || nameLower.includes('rasul') || nameLower.includes('ustadz');

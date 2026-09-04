@@ -940,28 +940,40 @@ export const BlueprintDashboard: React.FC<BlueprintDashboardProps> = ({
                     </div>
                   </div>
 
-                  {char.clothing && char.clothing.length > 0 && (
+                  {char.clothing && (
                     <div>
                       <span className="text-zinc-400 block font-semibold mb-1">Pakaian & Kostum Era:</span>
                       <div className="flex flex-wrap gap-1.5">
-                        {char.clothing.map((item, i) => (
-                          <span key={i} className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[11px]">
-                            {item}
+                        {Array.isArray(char.clothing) ? (
+                          char.clothing.map((item, i) => (
+                            <span key={i} className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[11px]">
+                              {item}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[11px]">
+                            {String(char.clothing)}
                           </span>
-                        ))}
+                        )}
                       </div>
                     </div>
                   )}
 
-                  {char.accessories && char.accessories.length > 0 && (
+                  {char.accessories && (
                     <div>
                       <span className="text-zinc-400 block font-semibold mb-1">Aksesoris & Properti:</span>
                       <div className="flex flex-wrap gap-1.5">
-                        {char.accessories.map((acc, i) => (
-                          <span key={i} className="px-2 py-0.5 rounded bg-zinc-800/80 text-amber-300 text-[11px] border border-amber-500/20">
-                            {acc}
+                        {Array.isArray(char.accessories) ? (
+                          char.accessories.map((acc, i) => (
+                            <span key={i} className="px-2 py-0.5 rounded bg-zinc-800/80 text-amber-300 text-[11px] border border-amber-500/20">
+                              {acc}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="px-2 py-0.5 rounded bg-zinc-800/80 text-amber-300 text-[11px] border border-amber-500/20">
+                            {String(char.accessories)}
                           </span>
-                        ))}
+                        )}
                       </div>
                     </div>
                   )}
